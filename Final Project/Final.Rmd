@@ -1,0 +1,2307 @@
+---
+title: "Final Project"
+author: "Thuy Tien Luong (s4159259)"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r packages}
+#loading packages
+library(dLagM)      
+library(dynlm)      
+library(forecast)   
+library(ggplot2)    
+library(tseries)    
+library(TSA)
+library(Hmisc)
+library(xts)
+library(AER)
+library(urca)
+library(tseries)
+library(dynlm)
+library(zoo)
+```
+
+# Introduction
+This report examines how climate and pollution shape short and long-run dynamics in two phenology settings and one public-health setting, and delivers variety steps to forecast with quantified uncertainty.
+
+* In task 1, Paris disease-specific mortality was modelled using multivariate climate and air-quality covariates (temperature, particle size, chem1, chem2).
+The estimation and comparison of DLM, ARDL, polynomial DLM, Koyck, dynamic regression, exponential smoothing, and state-space (ETS) models were applied. Model choice is based on AIC/BIC, in-sample fit (R² where relevant), and out-of-sample comparability via MASE. The best model in general is used to produce 4-week-ahead point forecasts and 95% CIs.
+
+* In task 2, one pieces' First Flowering Day (FFD) was tested with univariate climate predictors (rain, temp, radiation, RH) across the same model classes. The report inspects ACF, allow models with/without intercept where appropriate, interpret lag coefficients (positive = later flowering; negative = earlier flowering), and select the best 4-year-ahead forecaster by MASE with AIC/BIC as tie-breakers
+
+* In task 3, the similarity of flowering orders (RBO) to the 1983 baseline was analysed. Part a fits univariate climate regressors (one at a time) using DLM/ARDL/poly/Koyck/dynamic models and selects the best 4-year-ahead forecaster by MASE (AIC/BIC as secondary). Part (b) incorporates the drought (1996–2009) via intervention dummies in dynlm, alongside lags and trend, then produces 3-year-ahead forecasts. Throughout, the report uses percentile scenarios for covariates where needed and check residual diagnostics (normality/whiteness/Ljung–Box).
+
+## Task 1 - Mortality Models
+### Data Description
+The data for this study consist of five weekly time-series collected in Paris, France over a ten-year period from 2010 to 2020 (508 observations). The Mortality series, representing disease-specific averaged weekly deaths, serves as the dependent variable. It is modeled using four independent predictors: Temperature, Pollutant Particle Size, and two indicators of noxious chemical emissions (Chem1 and Chem2) primarily generated from vehicular and industrial sources. Together, these variables provide an integrated view of both climatic and pollution-related factors potentially influencing fluctuations in disease-specific mortality.
+
+### Data Preparation
+This step involves importing the raw dataset, checking for structure and missing values to make data complete and consistent. Each variable was then converted into a weekly time series object with a frequency of 52 to represent the 52 weeks per year. 
+```{r}
+setwd("C:/Users/tally/OneDrive/Desktop/Forecasting/Final Project")
+task1 <- read.csv("mort.csv") #import dataset
+#display and check the dataset
+head(task1) 
+str(task1)
+colSums(is.na(task1))
+
+#to Time Series Object
+mor_ts <-ts(task1$mor, start = c(2010,1), frequency = 52)
+temp_ts <-ts(task1$temp, start = c(2010,1), frequency = 52)
+chem1_ts <-ts(task1$chem1, start = c(2010,1), frequency = 52)
+chem2_ts <-ts(task1$chem2, start = c(2010,1), frequency = 52)
+particle_ts <-ts(task1$particle.size, start = c(2010,1), frequency = 52)
+data_ts <-ts(task1[,2:6], start = c(2010,1), frequency = 52)
+```
+### Data Exploration
+#### Stationarity
+```{r}
+plots <- function(x,name,color) { #function to explore time series objects: time series plot, ACF plot, ADF test and PP test
+  plot(x, xlab='Year', main = paste("Time series of", name), col=color, type="o")
+  acf(x, main= paste("ACF plot for", name), lag.max = 48) #ACF plot
+  adf_result <- ur.df(x, type = "none", lags = 1, selectlags = "AIC") #ADF test
+  print(summary(adf_result))
+}
+```
+##### Mortality 
+```{r}
+plots(mor_ts,"Mortality", "red")
+```
+
+**Time series pattern**
+The time series of mortality reveals considerable short-term fluctuations around a relatively stable mean. 
+
+* No strong upward or downward trend, it fluctuates around a stable mean with short-term increases
+* It shows annual cycles with recurring peaks
+* Variance it mostly stable, though a few periods show higher volatility 
+* Occasional sharp spikes suggest short-term external events
+
+**Stationary**
+
+* The ACF plot shows a slow, gradual decline from a high autocorrelation (>0.8 at lag 1), indicating strong persistence and suggesting non-stationarity.
+* The cyclical pattern in the ACF implies possible annual seasonality (approximately every 52 weeks).
+* The ADF test statistic (–0.6755) is higher than the 5% critical value (–1.95) with p > 0.05, meaning the null hypothesis of a unit root cannot be rejected.
+* Both tests confirm that the mortality series is non-stationary, requiring differencing before model fitting.
+
+##### Temperature
+```{r}
+plots(temp_ts,"Temperature", "cadetblue")
+```
+
+**Time series pattern**
+The time series of temperature shows strong periodic movement and clear seasonality throughout 2010–2020
+
+* No consistent long-term trend is visible; temperature fluctuates within a stable range
+* Clear annual cycles with regular peaks and troughs, reflecting typical seasonal weather variation
+* Variance is largely constant, with similar amplitude across years 
+* No evident structural breaks or intervention effects; the series appears naturally cyclical
+
+**Stationary**
+
+* The ACF plot shows a cyclical pattern with slow decay, indicating strong seasonality and persistence in temperature levels
+* Significant autocorrelations extend across many lags, supporting the presence of periodic dependence
+* The ADF test statistic (–0.6556) is higher than the 5% critical value (–1.95) with p > 0.05, so the null hypothesis of a unit root cannot be rejected
+* Both tests confirm that the temperature series is non-stationary, primarily due to its strong seasonal structure.
+
+##### Chemical 1
+```{r}
+plots(chem1_ts,"Chemical 1", "darkolivegreen3")
+```
+
+**Time series pattern**
+The time series of Chemical 1 shows clear periodic fluctuations and strong seasonality over 2010–2020
+
+* No clear long-term trend; the series goes around a stable mean level
+* Distinct annual cycles with sharp recurring peaks and troughs, reflecting regular seasonal emissions
+* Variance is relatively stable, though peaks vary slightly across years
+* Occasional spikes suggest short-term external factors
+
+**Stationary**
+
+* The ACF plot shows a gradual decay with a repeating pattern, confirming seasonal dependence and persistence
+* The series maintains significant autocorrelation across multiple lags
+* The ADF test statistic (–2.2012) is slightly lower than the 5% critical value (–1.95), allowing rejection of the unit root hypothesis at the 5% level
+* Therefore, Chemical 1 is weakly stationary with the presence of strong seasonal pattern
+
+##### Chemical 2
+```{r}
+plots(chem2_ts,"Chemical 2", "darkorchid4")
+```
+
+**Time series pattern**
+The time series of Chemical 2 displays a noticeable downward movement over the 2010–2020 period with moderate short-term variation
+
+* A slight decreasing trend is evident, suggesting a gradual reduction in chemical emissions over time
+* Weak seasonal fluctuations are present but less pronounced compared to Chemical 1
+* Variance is relatively consistent, indicating stable emission variability across years
+* No major structural breaks, though small spikes appear intermittently
+
+**Stationary**
+
+* The ACF plot shows a slow decline from positive autocorrelation values across several lags, indicating persistent correlation and non-stationarity
+* Some cyclical dependence remains, but the autocorrelation weakens faster than in strongly seasonal series
+* The ADF test statistic (–2.4868) is lower than the 5% critical value (–1.95), meaning the null hypothesis of a unit root is rejected at the 5% level
+* Chemical 2 can be considered stationary, though a mild trend component may still need to be adjusted
+
+##### Particle size
+```{r}
+plots(particle_ts,"Particle size", "chocolate4")
+```
+
+**Time series pattern**
+The time series of particle size displays clear seasonal movement with moderate short-term fluctuations
+
+* No strong long-term trend; particle size goes around a consistent mean level
+* Distinct annual cycles with repeating peaks and troughs
+* Variance is relatively stable over time, with only a few isolated spikes
+* Occasional sharp peaks
+
+**Stationary**
+
+* The ACF plot shows a slow decay with cyclical behavior, confirming strong seasonal correlation and persistence
+* Autocorrelations remain significant across multiple lags, suggesting periodic dependence
+* The ADF test statistic (–1.7232) is higher than the 5% critical value (–1.95) with p > 0.05, meaning the null hypothesis of a unit root cannot be rejected
+* the particle size series is non-stationary, primarily due to its strong seasonal structure
+
+#### Correlation
+```{r}
+cor(data_ts)
+```
+
+* Mortality is positively correlated with chem1 (0.56) and particle size (0.44), indicating higher pollution levels are linked to higher mortality
+* It has a negative correlation with temperature (–0.44), suggesting more deaths occur during colder periods
+* Chem1 and particle size are strongly correlated (0.87)
+* Chem1 and chem2 are moderately correlated (0.51), implying shared emission patterns
+=> High inter-correlation among pollutants suggests possible multicollinearity, which will be checked before model selection
+
+#### Decomposition
+All time series objects were decomposed to separate its underlying trend, seasonal, and irregular components. 
+The STL method was selected because it is capable of handling non-linear trends and changing seasonal effects over time. Unlike the classical decomposition, STL does not assume fixed seasonality, making it well suited for weekly data with gradual seasonal shifts
+```{r}
+deplot <- function(x,name,color) { #function to explore time series objects: time series plot, ACF plot, ADF test and PP test
+  x_stl = stl(x,t.window = 15,s.window = "periodic", robust = TRUE)
+  plot(x_stl, main = paste("STL decomposition of ", name, " series"), col=color)
+}
+```
+
+##### Mortality
+```{r}
+deplot(mor_ts, "Mortality", "red")
+```
+
+The STL decomposition indicates that mortality is primarily driven by a strong and consistent seasonal component, with moderate trend variation and limited random noise. The series shows predictable yearly patterns, suggesting that seasonal effects and short-term fluctuations play a key role in mortality changes. It suggests that time-series forecasting models that can account for both trend and seasonality will be suitable.
+
+##### Temperature
+```{r}
+deplot(temp_ts,"Temperature", "cadetblue")
+```
+
+The STL decomposition of the temperature series reveals a dominant and consistent seasonal component, with clear yearly cycles. The trend component fluctuates moderately, showing short-term increases and decreases but no long-term directional change. The remainder is relatively small and random, suggesting that most variability in temperature is explained by its seasonal pattern. Overall, the temperature series is highly seasonal and stable, indicating strong predictability for use in forecasting models.
+
+##### Chem1
+```{r}
+deplot(chem1_ts,"Chemical 1", "darkolivegreen3")
+```
+
+The decomposition of Chemical 1 reveals a strong and regular seasonal pattern, with consistent peaks and troughs observed each year. The trend component shows a mild decline after 2011, stabilising in later years, suggesting a gradual reduction in emission intensity. The remainder is small and random, indicating that most variability is captured by the seasonal and trend components. Overall, Chemical 1 displays stable seasonality and limited irregular variation
+
+##### Chem2
+```{r}
+deplot(chem2_ts,"Chemical 2", "darkorchid4")
+```
+
+The STL decomposition of Chemical 2 shows a clear seasonal component combined with a slight downward trend, indicating a steady decrease in chemical emission levels over the decade. The remainder fluctuates randomly with low magnitude, confirming a consistent seasonal structure. Overall, Chemical 2 exhibits mild trend reduction and stable seasonality
+
+##### Particle size
+```{r}
+deplot(particle_ts,"Particle size", "chocolate4")
+```
+
+The particle size series demonstrates a pronounced and stable seasonal cycle, with repeating annual patterns and moderate short-term variation. The trend component fluctuates modestly, showing minor rises and falls but no persistent long-term direction. The residual component remains small and irregular. Overall, particle size is strongly seasonal with steady variance
+
+#### Differencing
+```{r}
+# Seasonal differencing for objects
+mor_diff <- diff(mor_ts, lag = 52)
+temp_diff <- diff(temp_ts, lag = 52)
+chem1_diff <- diff(chem1_ts, lag = 52)
+chem2_diff <- diff(chem2_ts) # normal differencing
+particle_diff <- diff(particle_ts, lag = 52)
+
+test<-function(x, name) {
+  acf(x, main = paste("ACF for", name))
+  adf.test(x)
+}
+
+#Test stationary 
+test(mor_diff, "Mortality")
+test(temp_diff, "Temperature")
+test(chem1_diff, "Chem1")
+test(chem2_diff, "Chem2")
+test(particle_diff, "Size")
+```
+
+The differenced series and ACF plots show that all five variables became stationary after first-order differencing
+
+* The ACF plots for each differenced series show a rapid decline toward zero confirming the removal of long-term dependence and seasonality
+* The ADF test results for all variables report p-values < 0.01, leading to rejection of the unit root hypothesis and confirming stationarity
+
+### Distributed Lag Models
+#### Finite DLM
+```{r}
+# loop for identifying number of lag for model 
+for (i in 1:10) {
+  model1.1 <- dlm(x = as.vector(temp_ts+chem1_ts+chem2_ts+particle_ts),
+                  y = as.vector(mor_ts),
+                  q = i)
+  cat("q =", i,
+      "AIC =", AIC(model1.1$model),
+      "BIC =", BIC(model1.1$model),
+      "MASE =", MASE(model1.1)$MASE,
+      "\n")
+}
+```
+
+A loop was executed to determine the optimal lag length for the combined predictor variable by comparing AIC, BIC, and MASE values across models. The lowest AIC (3530.22), BIC (3584.96), and MASE (1.15) values were obtained at lag 10
+
+*Model selection*
+```{r}
+# predictors in a list
+predictors <- list(
+  Temp = temp_ts,
+  Chem1 = chem1_ts,
+  Chem2 = chem2_ts,
+  Size = particle_ts
+)
+
+# all predictor subsets
+subsets <- list()
+for (k in 1:length(predictors)) {
+  subsets <- c(subsets, combn(names(predictors), k, simplify = FALSE))
+}
+
+# function to fit model and extract AIC, BIC, MASE
+fit_dlm_model <- function(predictors, subset, response) {
+  x <- Reduce("+", predictors[subset])
+  model <- dlm(x = as.vector(x), y = as.vector(response), q = 10)
+
+  AIC_val <- AIC(model$model)
+  BIC_val <- BIC(model$model)
+  mase_val <- MASE(model)$MASE   # << using the built-in function
+
+  return(data.frame(
+    Model = paste(subset, collapse = "+"),
+    AIC = AIC_val,
+    BIC = BIC_val,
+    MASE = mase_val
+  ))
+}
+
+# loop over all subsets and store results
+model_list <- lapply(subsets, function(s) fit_dlm_model(predictors, s, mor_ts))
+model_results <- do.call(rbind, model_list)
+
+# sort by MASE (lower is better)
+model_results <- model_results[order(model_results$MASE), ]
+
+#print result
+print(model_results)
+
+```
+
+A systematic variable selection was performed by testing all possible combinations of the four stationary predictors. The *Chem1*, only model provides the lowest AIC, BIC, and MASE, indicating the most efficient and accurate model.
+
+*Fit model*
+```{r}
+model_finite <- dlm(x=as.vector(chem1_ts),y=as.vector(mor_ts), q=10)
+summary(model_finite) 
+checkresiduals(model_finite)
+VIF.model_finite <- vif(model_finite$model)
+VIF.model_finite >10
+```
+
+* The model explains a moderate portion of mortality variation (Adjusted R² = 0.58), suggesting that Chemical 1 has a meaningful but not exhaustive effect on weekly mortality.
+* Several lags (0, 4, 6–9) are statistically significant (p < 0.05), confirming that delayed pollution effects are present.
+* Overall model significance is strong (F = 63.39, p < 0.001), indicating solid explanatory power.
+* Residuals are centered around zero and approximately normally distributed, but the Ljung–Box test (p < 0.001) indicates remaining short-term autocorrelation
+* No multicollinearity is detected (VIF < 10)
+=> This model performs well in terms of accuracy and interpretability, with a good fit and statistically significant lag effects. However, the presence of residual autocorrelation suggests it is not yet the most parsimonious or statistically optimal specification
+
+#### Polynomial DLM
+```{r}
+# function to fit model and extract AIC, BIC, MASE
+fit_poly_model <- function(predictors, subset, response) {
+  x <- Reduce("+", predictors[subset])
+  model <- polyDlm(x = as.vector(x), y = as.vector(response), q = 10, k=2)
+
+  AIC_val <- AIC(model$model)
+  BIC_val <- BIC(model$model)
+  mase_val <- MASE(model)$MASE   # take AIC, BIC, and MASE values
+
+  return(data.frame(
+    Model = paste(subset, collapse = "+"),
+    AIC = AIC_val,
+    BIC = BIC_val,
+    MASE = mase_val
+  ))
+}
+# loop over all subsets and store results
+model_list_poly <- lapply(subsets, function(s) fit_poly_model(predictors, s, mor_ts))
+model_results_poly <- do.call(rbind, model_list_poly)
+
+# sort by MASE (lower is better)
+model_results_poly <- model_results_poly[order(model_results_poly$MASE), ]
+
+#print result
+print(model_results_poly)
+```
+
+* The Chem1-only model again provides the lowest AIC (3293.55), BIC (3314.60), and MASE (0.93), confirming Chemical 1 as the strongest single predictor.
+* Overall fit metrics are slightly weaker than the Finite DLM (MASE increased from 0.91 → 0.93), showing that polynomial lag weights did not improve predictive accuracy
+
+```{r}
+model_poly <- polyDlm(x=as.vector(chem1_ts),y=as.vector(mor_ts), q=10, k=2)
+summary(model_poly)
+checkresiduals(model_poly)
+vif(model_poly$model)
+```
+
+* The model shows a moderate fit (Adj. R² = 0.57), slightly below the finite DLM. Only the current lag (z.t0) is significant, suggesting limited polynomial lag influence
+* The beta coefficients indicate a gradual cumulative effect, but the Ljung–Box test (p < 0.001) shows residual autocorrelation.
+* High VIF values (z.t0–z.t2 > 10) reveal strong multicollinearity among polynomial terms, reducing coefficient reliability. AIC/BIC (3293.5/3314.6) are comparable to the finite model, and MASE (0.93) is slightly higher, implying marginally lower accuracy.
+=> The Polynomial DLM offers smoother lag interpretation, but its performance is slightly weaker than the Finite DLM in both fit and forecasting accuracy due to multicollinearity and residual correlation
+
+#### Koyck transformation
+```{r}
+
+# function to fit model and extract AIC, BIC, MASE
+fit_koyck_model <- function(predictors, subset, response) {
+  x <- Reduce("+", predictors[subset])
+  model <- koyckDlm(x = as.vector(x), y = as.vector(response))
+  attr(model$model,"class") = "lm"
+
+  AIC_val <- AIC(model$model)
+  BIC_val <- BIC(model$model)
+  mase_val <- MASE(model)   # << using the built-in function
+
+  return(data.frame(
+    Model = paste(subset, collapse = "+"),
+    AIC = AIC_val,
+    BIC = BIC_val,
+    MASE = mase_val
+  ))
+}
+# loop over all subsets and store results
+model_list_koyck <- lapply(subsets, function(s) fit_koyck_model(predictors, s, mor_ts))
+model_results_koyck <- do.call(rbind, model_list_koyck)
+
+# sort by MASE (lower is better)
+model_results_koyck <- model_results_koyck[order(model_results_koyck$MASE), ]
+
+#print result
+print(model_results_koyck)
+```
+
+* Best model is Chem1 with lowest metrics among all predictors, it also shows better fit and accurary than both the Finite and Polynomial DLM
+* Chemical 1 has a strong short-term effect that decays geometrically over time
+
+*Fit model*
+```{r}
+model_koyck <- koyckDlm(x=as.vector(chem1_ts),y=as.vector(mor_ts))
+summary(model_koyck)
+checkresiduals(model_koyck)
+vif(model_koyck$model)
+```
+
+* The Koyck model demonstrates a strong fit (Adj. R² = 0.65), outperforming both the finite and polynomial DLMs. Both lagged mortality (Yt-1) and current Chemical 1 concentration (Xt) are highly significant (p < 0.001), indicating that chemical effects persist but decay gradually over time
+* The estimated decay factor and geometric lag coefficient confirm a smooth diminishing impact of past exposure
+* Residuals are approximately normal and uncorrelated, though the Ljung–Box test (p < 0.001) suggests minor remaining autocorrelation. No multicollinearity was detected.
+=> with AIC, BIC, and MASE, the model provides the best overall performance among all DLM methods
+
+#### Autoregressive DLM
+```{r}
+# loop to identify lag
+for (i in 1:5) {
+  for(j in 1:5) {
+  model4.1 <- ardlDlm(x = as.vector(temp_ts+chem1_ts+chem2_ts+particle_ts),
+                  y = as.vector(mor_ts),
+                  p = i, q = j)
+  cat("p =", i, "q =", j,
+      "AIC =", AIC(model4.1$model),
+      "BIC =", BIC(model4.1$model),
+      "MASE =", MASE(model4.1)$MASE,
+      "\n")
+  }
+}
+```
+
+* The selected model is ARDL(4,5), while its MASE is marginally higher than (5,5), the AIC and BIC is lowest
+
+```{r}
+# function to fit model and extract AIC, BIC, MASE
+fit_ard_model <- function(predictors, subset, response) {
+  x <- Reduce("+", predictors[subset])
+  model <- ardlDlm(x = as.vector(x), y = as.vector(response), p=4, q=5)
+
+  AIC_val <- AIC(model$model)
+  BIC_val <- BIC(model$model)
+  mase_val <- MASE(model)   # << using the built-in function
+
+  return(data.frame(
+    Model = paste(subset, collapse = "+"),
+    AIC = AIC_val,
+    BIC = BIC_val,
+    MASE = mase_val
+  ))
+}
+# loop over all subsets and store results
+model_list_ard <- lapply(subsets, function(s) fit_ard_model(predictors, s, mor_ts))
+model_results_ard <- do.call(rbind, model_list_ard)
+
+# sort by MASE (lower is better)
+model_results_ard <- model_results_ard[order(model_results_ard$MASE), ]
+
+#print result
+print(model_results_ard)
+```
+
+* The optimal model is combination of Chem1+Chem2+Size, which achives the best overall performance among all DLM types, combining low information criteria and strong forecast accuracy.
+
+```{r}
+model_ard <- ardlDlm(x=as.vector(chem1_ts + chem2_ts + particle_ts), y=as.vector(mor_ts), p=4, q=5)
+summary(model_ard)
+checkresiduals(model_ard)
+vif(model_ard$model)
+```
+
+* The model achieves a strong fit with Adjusted R² = 0.73, indicating that over 70% of mortality variation is explained by current and lagged pollutant levels. Among lagged pollutant terms, X.t, X.1, and X.4 are statistically significant (p < 0.05), confirming both immediate and delayed impacts of pollutant exposure
+* Several autoregressive terms (Y.1, Y.2) are also significant, showing that past mortality levels substantially influence current outcomes.
+* The Ljung–Box test (p = 0.55) confirms the absence of serial correlation, suggesting that the model is well-specified and captures temporal dependence effectively. No multicollinearity is detected (all VIF < 10), supporting model stability
+=> Overall, ARDL(4,5) demonstrates the best performance across all DLM variants, combining strong explanatory power, valid residual assumptions, and superior AIC/BIC/MASE metrics
+
+#### Comparison of Distributed Lag Models
+```{r}
+DLM_results <- data.frame(Model = c("Finite", "Polynomial", "Koyck", "Autoregressive"),
+                          AIC=c(AIC(model_finite), AIC(model_poly), AIC(model_koyck), AIC(model_ard)), 
+                          BIC=c(BIC(model_finite), BIC(model_poly), BIC(model_koyck), BIC(model_ard)),
+                          MASE= c(MASE(model_finite)$MASE, MASE(model_poly)$MASE, MASE(model_koyck)$MASE, MASE(model_ard)$MASE))
+
+DLM_final_results <- DLM_results[order(DLM_results$MASE), ]
+print(DLM_final_results)
+```
+
+In conclusion: The ARDL model provides the most well-specified, and accurate representation of the mortality–pollution relationship, capturing both short- and long-term effects effectively
+
+### Dynamic Linear Models
+```{r}
+Y.t <- mor_ts
+
+#Dynamic models
+dynlm1 <-dynlm(Y.t ~ L(Y.t, 1))
+dynlm2 <- dynlm(Y.t ~ L(Y.t, 1:2))
+dynlm3 <- dynlm(Y.t ~ L(Y.t, 1:3) + temp_ts + trend(Y.t) + season(Y.t))
+dynlm4 <- dynlm(Y.t ~ L(Y.t, 1:2) + chem1_ts + chem2_ts + trend(Y.t) + season(Y.t))
+dynlm5 <- dynlm(Y.t ~ L(Y.t, 1:3) + chem1_ts + particle_ts + trend(Y.t) + season(Y.t))
+dynlm6 <- dynlm(Y.t ~ L(Y.t, 1:3) + particle_ts + chem1_ts + chem2_ts + trend(Y.t) + season(Y.t))
+dynlm7 <- dynlm(Y.t ~ L(Y.t, 1:3) + chem1_ts + temp_ts + trend(Y.t) + season(Y.t))
+dynlm8 <- dynlm(Y.t ~ L(Y.t, 1:4) + chem1_ts + chem2_ts + particle_ts + temp_ts + trend(Y.t) + season(Y.t))
+dynlm9 <- dynlm(Y.t ~ L(Y.t, 1:4) + particle_ts + chem2_ts + trend(Y.t) + season(Y.t))
+
+# comparison table
+results <- data.frame (Model = c("1", "2", "3", "4", "5", "6", "7", "8", "9"),
+                       AIC = c(AIC(dynlm1), AIC(dynlm2), AIC(dynlm3), AIC(dynlm4), AIC(dynlm5), AIC(dynlm6), AIC(dynlm7), AIC(dynlm8), AIC(dynlm9)),
+                       BIC = c(BIC(dynlm1), BIC(dynlm2), BIC(dynlm3), BIC(dynlm4), BIC(dynlm5), BIC(dynlm6), BIC(dynlm6), BIC(dynlm8), BIC(dynlm9)), 
+                       MASE = c(MASE(lm(dynlm1))$MASE, MASE(lm(dynlm2))$MASE, MASE(lm(dynlm3))$MASE, MASE(lm(dynlm4))$MASE, MASE(lm(dynlm5))$MASE, MASE(lm(dynlm6))$MASE, MASE(lm(dynlm7))$MASE, MASE(lm(dynlm8))$MASE, MASE(lm(dynlm9))$MASE))
+
+dyn_results <- results[order(results$MASE), ]
+print(dyn_results)
+```
+
+* Among the nine dynamic regression models tested, Model 8 achieved the best overall performance, with the lowest AIC (3094.44), BIC (3356.24), and MASE (0.69)
+
+*Dynamic Models 8 - Chem1 + Chem2 + Size + Temp*
+```{r}
+summary(dynlm8)
+checkresiduals(dynlm8)
+```
+
+* The model demonstrates a strong fit (Adjusted R² = 0.76), explaining about 76% of mortality variation. The coefficients for lagged mortality (Y.t−1, Y.t−2) are positive and highly significant, confirming strong temporal persistence in mortality
+* Among environmental predictors, temperature (p = 0.03) has a significant positive effect, while chemical and particle variables show no strong short-term influence. The trend term is negative and significant, suggesting a gradual decline in mortality over time
+* Residual diagnostics show residuals approximately normally distributed and uncorrelated, with the Breusch–Godfrey p-value (0.027) suggesting only mild remaining autocorrelation but no serious violation
+=> the model captures both temporal dynamics and environmental effects effectively, with stable residuals and the lowest AIC/BIC/MASE, confirming it as the most optimal and well-specified model at the moment.
+
+### Exponential smoothing
+The weekly mortality series displays a clear, repeating annual cycle with pronounced peaks and troughs, indicating strong seasonality. Therefore, exponential-smoothing forecasts were generated using the Holt-Winters seasonal method, which explicitly models level, trend, and seasonal components and is suitable for data with repeating seasonal patterns.
+```{r}
+# Convert weekly ts to a zoo object
+z <- as.zoo(mor_ts)
+# Convert weekly index to monthly index (using year-mon)
+z_monthly <- aggregate(z, as.yearmon, mean)
+# Convert back to ts
+mor_monthly <- as.ts(z_monthly)
+```
+
+Because the Holt-Winters model is sensitive to high seasonal frequencies, the weekly data were aggregated to monthly averages prior to model fitting to ensure stable estimation and reliable seasonal smoothing.
+
+*Model selection*
+```{r}
+Es.add <- hw(mor_monthly, seasonal = "additive")
+Es.add.damp <- hw(mor_monthly, seasonal = "additive", damped = TRUE)
+Es.mul <- hw(mor_monthly, seasonal = "multiplicative")
+Es.mul.damp <- hw(mor_monthly, seasonal = "multiplicative", damped = TRUE)
+
+HW_results <- data.frame(Model = c("HW_Add", "HW_Add_Damp", "HW_Mul", "HW_Mul_Damp"),
+                          AIC = c(Es.add$model$aic, Es.add.damp$model$aic, Es.mul$model$aic, Es.mul.damp$model$aic),
+                          BIC = c(Es.add$model$bic, Es.add.damp$model$bic, Es.mul$model$bic, Es.mul.damp$model$bic),
+                          MASE= c(accuracy(Es.add)[,"MASE"][1], accuracy(Es.add.damp)[,"MASE"][1],
+           accuracy(Es.mul)[,"MASE"][1], accuracy(Es.mul.damp)[,"MASE"][1]))
+
+HW_results <- HW_results[order(HW_results$MASE), ]
+print(HW_results)
+```
+
+* Four Holt–Winters models were compared to identify the best seasonal form. The multiplicative damped model (HW_Mul_Damp) achieved the lowest AIC (905.53), BIC (955.40), and MASE (0.66), indicating the best overall fit and forecast accuracy. This suggests that mortality variations are proportional to the level of the series and that applying damping improves stability in long-term forecasts.
+
+*Model summary*
+```{r}
+summary(Es.mul.damp)
+checkresiduals(Es.mul.damp)
+```
+
+* The Damped Holt–Winters multiplicative model achieved the lowest MASE (0.6621) among all exponential-smoothing specifications, confirming its superior predictive performance. The model successfully passed the Ljung–Box test (p = 0.088 > 0.05), indicating no significant autocorrelation in the residuals and validating its adequacy
+* To further verify the optimal trend specification and ensure maximum forecast accuracy, additional Holt–Winters models incorporating exponential trend and exponential + damped trend components were tested and compared.
+
+*Multiplicative seasonal + Exponential trend*
+```{r}
+Es.mul.ex <- hw(mor_monthly, seasonal = "multiplicative", exponential = TRUE)
+summary(Es.mul.ex)
+checkresiduals(Es.mul.ex)
+```
+
+* The Holt-Winters multiplicative model with exponential trend achieved an AIC of 906.23, BIC of 953.33, and MASE of 0.666, indicating good predictive accuracy and well-behaved residuals (Ljung–Box p = 0.106 > 0.05). The exponential trend captures small long-term changes in mortality levels while preserving proportional seasonal variation
+
+*Multiplicative Seasonal + Exponential Trend + Damped Trend*
+```{r}
+Es.mul.damp.ex <- hw(mor_monthly, seasonal = "multiplicative", exponential = TRUE, damped = TRUE)
+summary(Es.mul.damp.ex)
+checkresiduals(Es.mul.damp.ex)
+```
+
+* This is a very similar result, with slightly improved residual normality and comparable accuracy. The damped exponential-trend model shows that the growth component diminishes smoothly over time, suggesting that recent mortality levels exert greater influence on future predictions than distant observations.
+
+*Comparison table*
+``` {r}
+HW_mul_results <- data.frame(Model = c("HW_Mul_Damp", "HW_Mul_Ex", "HW_Mul_Ex_Damp"),
+                          AIC = c(Es.mul.damp$model$aic, Es.mul.ex$model$aic, Es.mul.damp.ex$model$aic),
+                          BIC = c(Es.mul.damp$model$bic, Es.mul.ex$model$bic, Es.mul.damp.ex$model$bic),
+                          MASE= c(accuracy(Es.mul.damp)[,"MASE"][1], accuracy(Es.mul.ex)[,"MASE"][1],
+           accuracy(Es.mul.damp.ex)[,"MASE"][1]))
+
+HW_mul_results <- HW_mul_results[order(HW_mul_results$MASE), ]
+print(HW_mul_results)
+```
+
+* The HW_Mul_Ex_Damp specification offers the most balanced combination of accuracy, model parsimony, and realistic dynamic behaviour, making it the preferred model for forecasting mortality. 
+
+### State-space models
+```{r}
+# Define model codes ("_d" to indicate damped)
+models <- c("AAA", "AAA_d", "MAM", "MAM_d", "MAA", "MAA_d", "MMM", "MMM_d")
+
+# Fit all models and collect metrics
+ets_results <- do.call(rbind, lapply(models, function(m) {
+  damped_flag <- grepl("_d$", m)
+  model_code <- gsub("_d$", "", m)
+  fit <- ets(mor_monthly, model=model_code, damped=damped_flag)
+  data.frame(
+    Model = m,
+    AIC   = fit$aic,
+    BIC   = fit$bic,
+    MASE  = accuracy(fit)[1, "MASE"],
+    RMSE  = accuracy(fit)[1, "RMSE"]
+  )
+}))
+# Sort by MASE
+ets_results_sorted <- ets_results[order(ets_results$MASE), ]
+ets_results_sorted
+
+#Fit auto 
+ets_model <-ets(mor_monthly)
+summary(ets_model)
+```
+
+* Among the nine ETS configurations tested, the damped MAM model (ETS(M, A, M), damped) produced the lowest AIC (903.58), lowest MASE (0.659), and lowest RMSE (3.82), outperforming all other state-space alternatives. 
+
+*Model summary*
+```{r}
+ets_MAdM <- ets(mor_monthly, model = "MAM", damped = TRUE)
+summary(ets_MAdM)
+checkresiduals(ets_MAdM)
+```
+
+* The model achieved the lowest AIC (903.58) and MASE (0.659).
+* The smoothing parameters suggest a relatively stable level and seasonality, while the damping parameter moderates the long-term trend. he Ljung–Box test (p = 0.07) shows that residuals are free from serial correlation, confirming the adequacy of the model structure.
+* The residual plots show no visible pattern and follow an approximately normal distribution, further validating the model’s reliability.
+
+#### Model comparison
+```{r}
+final_results <- data.frame(Model = c("Autoregressive", "Dynamic", "HW_Mul_Ex_Damp", "MAdM"),
+                          AIC = c(AIC(model_ard), AIC(dynlm6), Es.mul.damp.ex$model$aic, ets_MAdM$aic),
+                          BIC = c(BIC(model_ard), BIC(dynlm6), Es.mul.damp.ex$model$bic, ets_MAdM$bic),
+                          MASE= c(MASE(model_ard)$MASE, MASE(lm(dynlm6))$MASE ,accuracy(Es.mul.damp.ex)[,"MASE"][1], accuracy(ets_MAdM)[,"MASE"][1]))
+
+final_results <- final_results[order(final_results$MASE), ]
+print(final_results)
+```
+
+* The results across all modelling approaches demonstrate that the Holt–Winters multiplicative model with exponential and damped trend (HW_Mul_Ex_Damp) is the most optimal.
+* In contrast, the Dynamic and Autoregressive DLM models, while providing acceptable fits (MASE ≈ 0.69–0.77), exhibited substantially higher information criteria, suggesting less efficient parameterization for this dataset
+
+### Forecasting
+While the original dataset is recorded weekly, the Holt–Winters exponential smoothing model was applied to a monthly-aggregated series to better capture the broader seasonal cycle and reduce short-term volatility.
+
+*Holt-Winters*
+```{r}
+
+fit.forecast <- hw(mor_monthly, seasonal = "multiplicative",damped = TRUE, exponential = TRUE, h=4)
+
+# Generating forecasts
+
+fitting <- fit.forecast$mean
+upper_limit <- fit.forecast$upper[,2]
+lower_limit <- fit.forecast$lower[,2]
+
+predict_mor <- ts.intersect(ts(lower_limit, start = end(mor_monthly), frequency = 12), ts(fitting,start = end(mor_monthly), frequency = 12), ts(upper_limit,start = end(mor_monthly), frequency = 12))
+
+colnames(predict_mor) <- c("Lower Limit", "Prediction Points", "Upper limit")
+
+# Displaying forecasts
+
+predict_mor
+
+plot(fit.forecast, main = "Mortality series with four weeks (1 month) ahead forecasts", ylab = "Mortality")
+lines(fitted(fit.forecast), col = "blue")
+lines(fit.forecast$mean, col = "blue", lwd = 2)
+legend("topleft", lty = 1, col = c("black", "blue"), c("Data", "Forecasts"))
+
+```
+
+* The assignment required a four-week ahead forecast, but the Holt–Winters method was applied to a monthly-aggregated dataset to satisfy the model’s requirements for stable seasonal structure. As shown in the plot, the first forecasted month, October 2019, effectively represents the 4-week (approximately one-month) ahead prediction. The model forecasts a mortality level of 97.5 cases, with a 95% prediction interval of [88.8, 106.2].
+* However, the weekly series contains more irregular short-term variations and transient peaks that the monthly-aggregated model smooths out. This explains why the monthly Holt–Winters forecasts clearly capture the overall seasonal and trend dynamics, but not the finer weekly fluctuations.
+
+
+## Task 2 - Australian plants
+### Data Description
+The dataset used in this analysis originates from Hudson & Keatley (2021), who investigated the influence of climatic variables on the First Flowering Day (FFD) across 81 Australian plant species from 1984 to 2014. Each observation represents the day of first flowering within a calendar year (ranging from 1 to 365). For this task, the focus is on one selected species, providing a univariate time series of FFD values over 31 years, accompanied by four corresponding annual climatic covariates:
+
+* Ranifall
+* Temperature
+* Radiation
+* Relative Humidity
+A second dataset provides future covariate values (rain, temp, rad, RH) for the years 2015 to 2018, enabling four-year-ahead forecasts of FFD.
+
+### Data Preparation
+*Import Dataset*
+```{r}
+setwd("C:/Users/tally/OneDrive/Desktop/Forecasting/Final Project")
+task2 <- read.csv("FFD.csv") # import data
+task2_co <- read.csv("Covariate.csv") # import data
+head(task2) #data check
+head(task2_co)
+str(task2) #data structure check
+```
+
+```{r}
+task2$FFD <- as.numeric(task2$FFD)
+str(task2)
+colSums(is.na(task2))
+task2_co <- na.omit(task2_co)
+head(task2_co)
+
+FFD <- ts(task2$FFD, start = c(1984,1), frequency = 1)
+temp <- ts(task2$Temperature, start = c(1984,1), frequency = 1)
+rain <- ts(task2$Rainfall, start = c(1984,1), frequency = 1)
+rad <- ts(task2$Radiation, start = c(1984,1), frequency = 1)
+humd <- ts(task2$RelHumidity, start = c(1984,1), frequency = 1)
+data_task2 <-ts(task2[,2:6], start = c(1984,1), frequency = 1)
+```
+
+* The dataset was first checked for consistency and missing values. Each variable was converted to a numeric type to ensure proper compatibility with time series functions. A structure check *str()* confirmed that the dataset contained 31 yearly observations (1984–2014) for six variables: Year, Temperature, Rainfall, Radiation, Relative Humidity, and FFD. A missing value check returned zero missing observations across all variables, confirming data completeness.
+* The climate covariate data for the forecast period (2015–2018) was also cleaned using na.omit() to remove any potential missing entries before forecasting.
+* All variables were converted to time series object
+
+### Data Exploration
+#### Stationarity
+##### FFD - First Flowering Day
+```{r}
+plots(FFD, "FFD", "green4")
+```
+
+**Time series pattern**
+The time series of First Flowering Day (FFD) reveals substantial short-term variability across the 31-year observation period
+
+* The series does not display a clear upward or downward trend, fluctuating around a relatively stable long-term mean.
+* It has annual climatic influences rather than long-term changes
+* Variance remains mostly stable throughout the series, with a few years showing more extreme values
+* No consistent cyclical pattern is visible, suggesting that flowering is primarily influenced by irregular climate variations rather than periodic trends
+
+**Stationary**
+
+* The ACF plot displays weak autocorrelation across lags, with no slow decay pattern, implying that there is little persistence from one year to the next
+* The Augmented Dickey–Fuller (ADF) test statistic (–0.34) is higher than the 5% critical value (–1.95), with a p-value greater than 0.05, meaning the null hypothesis of a unit root cannot be rejected.
+=> Both the visual inspection and statistical test confirm that the FFD series is non-stationary, indicating that its mean and variance change slightly over time.
+
+##### Temperature
+```{r}
+plots(temp, "Temperature", "firebrick4")
+```
+
+**Time series pattern**
+The time series of Temperature shows relatively small fluctuations over the 31-year period, reflecting the stable climatic conditions characteristic of long-term averages.
+
+* There is no evident upward or downward trend, suggesting that the yearly average temperature has remained largely consistent throughout the observation period
+* The variance is stable, with no signs of increasing or decreasing volatility
+* Minor short-term fluctuations are present
+* No obvious seasonality is detected
+
+**Stationary**
+
+* The ACF plot reveals moderate positive autocorrelation at early lags (around 0.3 at lag 1–2), but no clear long-term persistence, suggesting that temperature values are weakly correlated across consecutive years.
+* The ADF test statistic (0.4507) is higher than the 5% critical value (–1.95), and the p-value (0.6558) confirms that the null hypothesis of a unit root cannot be rejected.
+=> Therefore, the temperature series is non-stationary.
+
+##### Rainfall
+```{r}
+plots(rain, "Rainfall", "blue4")
+```
+
+**Time series pattern**
+It has noticeable interannual flucuations between 1984 and 2014
+
+* The series shows no consistent upward or downward trend
+* Occasional sharp drops indicate years of unusually low rainfall
+* The variance appears constant, implying a homogeneous level of variability throughout the series
+* No clear cyclic or periodic pattern is present
+
+**Stationary**
+
+* The ACF plot reveals low autocorrelation across most lags, with a small positive correlation at lag 1 but no gradual decay pattern
+* The ADF test statistic (–0.4511) is higher than the 5% critical value (–1.95), and the p-value (0.6555) fails to reject the null hypothesis of a unit root.
+=> These results confirm that the rainfall series is non-stationary, with its mean not constant over time.
+
+##### Radiation
+```{r}
+plots(rad, "Radiation", "gold3")
+```
+
+**Time series pattern**
+The time series of Radiation shows mild year-to-year variation 
+
+* The series exhibits no evident long-term trend
+* A noticeable dip around the early 1990s suggests a temporary reduction in solar intensity
+* After 2000, radiation values show a mild increase followed by a stabilization, with variance remaining largely constant throughout.
+* No strong periodic or cyclical pattern is evident
+
+**Stationary**
+
+* The ACF plot indicates weak positive autocorrelation at early lags, with no sustained decay pattern, suggesting that radiation levels across years are only weakly correlated.
+* The ADF test statistic (–0.1405) exceeds the 5% critical value (–1.95), with a p-value (0.889) confirming failure to reject the null hypothesis of a unit root.
+* This implies that the radiation series is non-stationary
+
+##### RelHumidity
+```{r}
+plots(humd, "Humidity", "cadetblue4")
+```
+
+**Time series pattern**
+The time series of Relative Humidity exhibits small fluctuations around a stable long-term mean
+
+* The series shows no apparent upward or downward trend
+* Short-term variations are visible, with occasional spikes followed by mild declines, suggesting the presence of natural interannual variability rather than structural change.
+* The variance is stable, implying that the magnitude of year-to-year fluctuations has remained constant
+
+**Stationary**
+
+* The ACF plot displays weak correlations at early lags and a small spike around lag 10, but no consistent pattern of gradual decay — suggesting limited autocorrelation in the humidity data.
+* The ADF test statistic (–0.1587) is higher than the 5% critical value (–1.95), and the p-value (0.875) indicates a failure to reject the null hypothesis of a unit root.
+=> This confirms that the relative humidity series is non-stationary
+
+#### Differencing
+##### FFD
+```{r}
+FFD_diff = diff(FFD)
+adf.test(FFD_diff)
+acf(FFD_diff)
+```
+
+* The ACF plot of the differenced FFD shows no significant autocorrelations beyond the first few lags and the Augmented Dickey–Fuller test statistic (–4.2935) is much lower than the 5% critical value (–1.95), and the p-value (0.01179) is below 0.05
+=> Stationary
+
+##### Temperature
+```{r}
+temp_diff = diff(temp)
+adf.test(temp_diff)
+acf(temp_diff)
+```
+
+* The first differencing of the Temperature series reduced the overall autocorrelation, but the ADF test still indicated non-stationarity
+
+*Second differencing*
+```{r}
+temp_diff2 = diff(diff(temp))
+adf.test(temp_diff2)
+acf(temp_diff2)
+```
+
+* After two differencing, the ACF shows minimal autocorrelation across all lags, confirming that the trend and persistence have been successfully removed. 
+The ADF test statistic (–3.7145) is lower than the 5% critical value, and the p-value (0.04081) falls below 0.05
+=> The second-differenced temperature series is stationary. 
+
+##### Rainfall
+```{r}
+rain_diff = diff(rain)
+adf.test(rain_diff)
+acf(rain_diff)
+```
+
+* The ACF plot of the differenced series shows no strong autocorrelation beyond the first lag and ADF test statistic (–3.7734) is lower than the 5% critical value (–1.95), and the p-value (0.03616) is below 0.05
+=> Stationary
+
+##### Radiation
+```{r}
+rad_diff = diff(rad)
+adf.test(rad_diff)
+acf(rad_diff)
+```
+
+* The first differencing hasn't achieved the stationarity then the second will be applied
+*Second differencing*
+```{r}
+rad_diff2 = diff(rad_diff)
+adf.test(rad_diff2)
+acf(rad_diff2)
+```
+
+* The second differencing hasn't achieved the stationarity then the third will be applied
+
+*Third differencing*
+```{r}
+rad_diff3 = diff(rad_diff2)
+adf.test(rad_diff3)
+acf(rad_diff3)
+```
+
+* After three rounds of differencing, the ACF plot shows no significant autocorrelation at any lag and the ADF test statistic (–4.1613) is well below the 5% critical value (–1.95), and the p-value (0.01709) is below 0.05
+=> stationary
+
+##### RelHumidity
+```{r}
+humd_diff = diff(humd)
+adf.test(humd_diff)
+acf(humd_diff)
+```
+
+* The stationary hasn't been achieved by first differencing so the second will be applied
+
+*Second differencing*
+```{r}
+humd_diff2 = diff(humd_diff)
+adf.test(humd_diff2)
+acf(humd_diff2)
+```
+
+* The ACF plot indicates that autocorrelation has largely diminished, with most lags falling within the confidence bounds and ADF test statistic (–3.9704) is below the 5% critical value (–1.95), and the p-value (0.02363) is less than 0.05
+=> Stationary
+
+#### Correlation
+```{r}
+cor(data_task2)
+```
+
+* Rainfall and radiation have a very weak positive correlation (0.051 & 0.047) with FFD, respectively
+* While temperature and humidify present a weak negative correlation (–0.248 & –0.129) with FFD, respectively
+* Among the predictors themselves, rainfall and radiation display strong negative correlation - temperature and rainfall have a moderate positive correlation suggesting potential multicollinearity to be considered
+
+## Fitting model
+### Distributed Lag Models
+#### Finite DLM
+**Lag selection**
+*Temperature*
+```{r}
+finiteDLMauto(x=as.vector(temp), y=as.vector(FFD), q.min=1, q.max=10, model.type="dlm", error.type="MASE", trace=TRUE)
+```
+*Rainfall*
+```{r}
+finiteDLMauto(x=as.vector(rain), y=as.vector(FFD), q.min=1, q.max=10, model.type="dlm", error.type="MASE", trace=TRUE)
+```
+*Radiation*
+```{r}
+finiteDLMauto(x=as.vector(rad), y=as.vector(FFD), q.min=1, q.max=10, model.type="dlm", error.type="MASE", trace=TRUE)
+```
+*Humidity*
+```{r}
+finiteDLMauto(x=as.vector(humd), y=as.vector(FFD), q.min=1, q.max=10, model.type="dlm", error.type="MASE", trace=TRUE)
+```
+
+* Overall, the 10-lag structure for rainfall, radiation, and humidity provides the best model fit, while temperature performs optimally at eight lags. These selected lag lengths will be used for subsequent finite distributed lag model estimation and comparison with other models
+
+*Model fitting with univariate predictions*
+```{r}
+#Temp as predictor
+finite_temp <-dlm(x=as.vector(temp), y=as.vector(FFD), q=8)
+#Rainfall as predictor
+finite_rain <-dlm(x=as.vector(rain), y=as.vector(FFD), q=10)
+#Radiation as predictor
+finite_rad <-dlm(x=as.vector(rad), y=as.vector(FFD), q=10)
+#RelHumidity as predictor
+finite_humd <-dlm(x=as.vector(humd), y=as.vector(FFD), q=10)
+
+#Temp as predictor - no intercept
+finite_tempnoi <-dlm(formula = FFD ~ temp -1, data = data.frame(FFD, temp),
+                      q = 8)
+#Rainfall as predictor - no intercept
+finite_rainnoi <-dlm(formula = FFD ~ rain -1,data = data.frame(FFD,rain),
+                      q = 10)
+#Radiation as predictor - no intercept
+finite_radnoi <-dlm(formula = FFD ~ rad -1, data = data.frame(FFD, rad),
+                      q = 10)
+#RelHumidity as predictor - no intercept
+finite_humdnoi <-dlm(formula = FFD ~ humd -1, data = data.frame(FFD, humd),
+                      q = 10)
+```
+
+* Four finite distributed lag (DLM) models were estimated for Temperature, Rainfall, Radiation, and Relative Humidity as individual predictors of FFD. Each model was fitted both with and without an intercept term
+* The model with an intercept captures both the average flowering day and the delayed influence of climatic variables, while the no-intercept version isolates the pure lagged effects of each predictor.
+
+*Evaluate models*
+```{r}
+# comparison table
+results_finite_task2 <- data.frame (Model = c("temp", "rain", "rad", "humd", "tempnoi", "rainnoi", "radnoi", "humdnoi"),
+                       AIC = c(AIC(finite_temp$model), AIC(finite_rain$model), AIC(finite_rad$model), AIC(finite_humd$model), AIC(finite_tempnoi$model), AIC(finite_rainnoi$model), AIC(finite_radnoi$model), AIC(finite_humdnoi$model)),
+                       BIC = c(BIC(finite_temp$model), BIC(finite_rain$model), BIC(finite_rad$model), BIC(finite_humd$model), BIC(finite_tempnoi$model), BIC(finite_rainnoi$model), BIC(finite_radnoi$model), BIC(finite_humdnoi$model)), 
+                       MASE = c(MASE(finite_temp)$MASE, MASE(finite_rain)$MASE, MASE(finite_rad)$MASE, MASE(finite_humd)$MASE, MASE(finite_tempnoi)$MASE, MASE(finite_rainnoi)$MASE, MASE(finite_radnoi)$MASE, MASE(finite_humdnoi)$MASE))
+
+results_finite_task2 <- results_finite_task2[order(results_finite_task2$MASE), ]
+print(results_finite_task2)
+```
+
+* The rainfall-based DLM with an intercept (AIC = 197.72; MASE = 0.392) achieved the best overall performance, showing the lowest error and strongest model fit among all predictors.
+
+##### Analysis of best model
+```{r}
+summary(finite_rain)
+```
+
+* The intercept (260.26) represents the average FFD in the absence of rainfall effects, indicating a baseline flowering time around the 260th day of the year
+* Positive coefficients (e.g., at lags 3, 5, and 7) indicate that higher rainfall during those years tends to delay flowering, leading to a higher FFD value (later occurrence)
+* Negative coefficients (e.g., at lags 4, 10, and to a lesser extent at lag 2) imply that increased rainfall in those years is associated with earlier flowering (lower FFD)
+* The significant lags (p < 0.05) were observed at lag 3 (p = 0.03), lag 4 (p = 0.04), lag 5 (p = 0.02), and lag 10 (p = 0.04), suggesting these rainfall periods exert the strongest influence on FFD
+* The adjusted R² = 0.26 and p-value = 0.235 suggest that not all lagged rainfall effects are statistically strong jointly
+
+```{r}
+checkresiduals(finite_rain)
+vif(finite_rain$model)
+```
+
+* The residuals fluctuate around zero without a clear trend, suggesting a reasonable model fit. However, a few large deviations indicate some unexplained variation
+* The ACF shows mild autocorrelation, and the Ljung–Box test (Q = 12.897, p = 0.0118) confirms that residuals are not fully independent. The histogram appears roughly normal with slight right skewness
+* Overall, the model performs adequately, though minor autocorrelation suggests slight improvement may be possible
+
+##### Forecasting of best model
+```{r}
+x.new = matrix(c(2.27,2.38,2.26,2.27), ncol=4, nrow=1)
+finite_rain <-dlm(formula=FFD ~ Rainfall , data = task2, q=10)
+forecast_bound <-dLagM::forecast(model = finite_rain,x=x.new,h=4,interval = TRUE)
+forecast_bound
+forecast_finite <- dLagM::forecast(model=finite_rain, x=x.new, h=4)
+
+Lower <- ts(forecast_bound$forecasts$Lower, start = 2015)
+Upper <- ts(forecast_bound$forecasts$Upper, start = 2015)
+
+plot(ts(c(as.vector(FFD),forecast_finite$forecasts),start=1984),type="o",col="blue", ylab="FFD_forecasted", ylim = c(160, 310),
+main="FFD four year ahead predicted values from 2015-2018",)
+lines(ts(as.vector(FFD),start=1984),col="black",type="o")
+lines(Lower, col = "red", lty = 2)
+lines(Upper, col = "red", lty = 2)
+polygon(
+  x = c(time(Lower), rev(time(Upper))),
+  y = c(Lower, rev(Upper)),
+  col = rgb(1, 0, 0, 0.2),
+  border = NA
+)
+legend("bottomleft", lty = 1,pch=1,text.width=11, col = c("blue","black"), c("Finite DLM","Data (FFD)"))
+```
+#### Polynomial DLM
+
+* There is no need to fit separate versions without an intercept because these models automatically account for the baseline level of FFD, making the inclusion or exclusion of an intercept redundant
+*Fitting*
+```{r}
+# fitting model
+poly_temp <-polyDlm(x=as.vector(temp), y=as.vector(FFD), q=8, k=2)
+poly_rain <-polyDlm(x=as.vector(rain), y=as.vector(FFD), q=10, k=2)
+poly_rad <-polyDlm(x=as.vector(rad), y=as.vector(FFD), q=10, k=2)
+poly_humd <-polyDlm(x=as.vector(humd), y=as.vector(FFD), q=10, k=2)
+```
+*Evaluate models*
+```{r}
+# comparison table
+results_poly_task2 <- data.frame (Model = c("temp", "rain", "rad", "humd"),
+                       AIC = c(AIC(poly_temp$model), AIC(poly_rain$model), AIC(poly_rad$model), AIC(poly_humd$model)),
+                       BIC = c(BIC(poly_temp$model), BIC(poly_rain$model), BIC(poly_rad$model), BIC(poly_humd$model)), 
+                       MASE = c(MASE(poly_temp)$MASE, MASE(poly_rain)$MASE, MASE(poly_rad)$MASE, MASE(poly_humd)$MASE))
+
+results_poly_task2 <- results_poly_task2[order(results_poly_task2$MASE), ]
+print(results_poly_task2)
+```
+
+* Among the four models, the rainfall-based model achieved the lowest MASE (0.625) and relatively low AIC (201.02) and BIC (206.24), indicating superior predictive accuracy and model fit. Although the humidity model showed the lowest AIC and BIC values, its MASE was slightly higher (0.652), suggesting that rainfall remains the most reliable predictor when considering both model efficiency and accuracy
+
+*Analysis of best model*
+```{r}
+summary(poly_rain)
+```
+
+* The lag coefficients alternate in sign, indicating that the rainfall effect on flowering is nonlinear and delayed. Specifically, the negative first lag (–3.23) implies that higher rainfall in the current year may slightly advance flowering (earlier FFD), while the positive second lag (6.54) suggests rainfall from the previous year may delay flowering (later FFD)
+* However, none of the coefficients are statistically significant (p > 0.05), meaning rainfall does not have a strong or consistent influence on FFD over time
+* The R² = 0.16 indicates that only 16% of FFD variation is explained by rainfall, suggesting weak predictive power
+
+```{r}
+checkresiduals(poly_rain)
+vif(poly_rain$model)
+```
+
+* Residuals fluctuate around zero without a clear trend, ACF plot shows no significant autocorrelation within the first 7 lags, and histogram of residuals approximates a normal distribution. However
+* These diagnostics confirm that the rainfall-based polyDLM model satisfies key model assumptions, and its residuals are random and uncorrelated, supporting its validity for short-term forecasting
+
+*Forecasting*
+```{r}
+forecast_poly <- dLagM::forecast(poly_rain,x = x.new ,h = 4)
+
+plot(ts(c(as.vector(FFD),forecast_finite$forecasts),start=1984),type="o",col="blue", ylab="FFD_forecasted",
+main="FFD four year ahead predicted values from 2015-2018")
+lines(ts(c(as.vector(FFD),forecast_poly$forecasts),start=1984),type="o",col="darkmagenta")
+lines(ts(as.vector(FFD),start=1984),col="black",type="o")
+legend("bottomleft", lty = 1,pch=1,text.width=11, col = c("blue","darkmagenta","black"), c("Finite DLM","Poly DLM","Data (FFD)"))
+```
+
+#### Koyck transformation
+*Fitting*
+
+* The Koyck model already includes an intercept to maintain its autoregressive structure and equilibrium mean, making a “no-intercept” version conceptually invalid and unnecessary
+```{r}
+koyck_temp <-koyckDlm(x=as.vector(temp), y=as.vector(FFD))
+koyck_rain <-koyckDlm(x=as.vector(rain), y=as.vector(FFD))
+koyck_rad <-koyckDlm(x=as.vector(rad), y=as.vector(FFD))
+koyck_humd <-koyckDlm(x=as.vector(humd), y=as.vector(FFD))
+```
+*Evaluate models*
+```{r}
+results_koyck_task2 <- data.frame (Model = c("temp", "rain", "rad", "humd"),
+                       AIC = c(AIC(koyck_temp), AIC(koyck_rain), AIC(koyck_rad), AIC(koyck_humd)),
+                       BIC = c(BIC(koyck_temp), BIC(koyck_rain), BIC(koyck_rad), BIC(koyck_humd)), 
+                       MASE = c(MASE(koyck_temp, koyck_rain, koyck_rad, koyck_humd)))
+results_koyck_task2
+```
+
+* The radiation model achieved the lowest AIC (284.38), lowest BIC (289.98), and smallest MASE (0.714), indicating the best overall fit and forecasting accuracy.
+
+*Analysis of best model*
+```{r}
+summary(koyck_rad, diagnostic=TRUE)
+checkresiduals(koyck_rad$model)
+vif(koyck_rad$model)
+```
+
+* The current radiation effect (β = –13.87) is negative, suggesting that higher radiation is associated with earlier flowering, though it is not statistically significant (p = 0.59).
+* The lag coefficient (φ = –0.033) is small and negative, implying a weak and decaying lag influence, meaning past radiation has very little effect on current FFD.
+* Diagnostic tests show no autocorrelation in residuals (Ljung-Box p = 0.17) and acceptable model adequacy.
+* The weak-instrument test is significant (p = 0.012), confirming that the radiation variable is relevant.
+* Although statistically insignificant, the model suggests that increased radiation slightly advances flowering time, while past radiation contributes minimally. The residual diagnostics indicate the model fits reasonably well without serial correlation
+
+*Forecasting*
+```{r}
+forecast_bound_koyck <- dLagM::forecast(model=koyck_rad,x=c(14.6,14.65,14.79,14.79) ,h = 4, interval=TRUE)
+forecast_bound_koyck
+forecast_koyck <- dLagM::forecast(model=koyck_rad,x=c(14.6,14.65,14.79,14.79) ,h = 4)
+
+plot(ts(c(as.vector(FFD),forecast_finite$forecasts),start=1984),type="o",col="blue", ylab="FFD_forecasted",
+main="FFD four year ahead predicted values from 2015-2018")
+lines(ts(c(as.vector(FFD),forecast_poly$forecasts),start=1984),type="o",col="darkmagenta")
+lines(ts(c(as.vector(FFD), forecast_koyck$forecasts), start=1984), type="o", col="olivedrab")
+lines(ts(as.vector(FFD),start=1984),col="black",type="o")
+legend("bottomleft", lty = 1,pch=1,text.width=11, col = c("blue","darkmagenta","olivedrab","black"), c("Finite DLM","Poly DLM","Koyck DLM","Data (FFD)"))
+```
+
+#### Autoregressive DLM
+**Lag selection**
+```{r}
+# Define predictors
+predictors <- list(
+  temp = as.vector(temp),
+  rain = as.vector(rain),
+  rad  = as.vector(rad),
+  humd = as.vector(humd)
+)
+
+# Loop over each variable and all p, q combinations
+for (var_name in names(predictors)) {
+  cat("\n===== Variable:", var_name, "=====\n")
+  
+  for (i in 1:5) {
+    for (j in 1:5) {
+      model.autoreg <- ardlDlm(
+        x = predictors[[var_name]],
+        y = as.vector(FFD),
+        p = i,
+        q = j
+      )
+      
+      # Print results
+      cat(
+        "p =", i,
+        "q =", j,
+        "AIC =", round(AIC(model.autoreg$model), 3),
+        "BIC =", round(BIC(model.autoreg$model), 3),
+        "MASE =", round(MASE(model.autoreg)$MASE, 3), "\n"
+      )
+    }
+  }
+}
+```
+
+* This function is performing lag order selection for autoregressive distributed lag (ARDL) models for each predictor variable.
+
+*Fitting model*
+```{r}
+# fitting model
+ardl_temp <- ardlDlm(x=as.vector(temp), y=as.vector(FFD), p=5, q=5)
+ardl_rain <- ardlDlm(x=as.vector(rain), y=as.vector(FFD), p=5, q=4)
+ardl_rad <- ardlDlm(x=as.vector(rad), y=as.vector(FFD), p=5, q=4)
+ardl_humd <- ardlDlm(x=as.vector(humd), y=as.vector(FFD), p=5, q=5)
+```
+*Evaluate models*
+```{r}
+# comparison table
+results_ardl_task2 <- data.frame (Model = c("temp", "rain", "rad", "humd"),
+                       AIC = c(AIC(ardl_temp$model), AIC(ardl_rain$model), AIC(ardl_rad$model), AIC(ardl_humd$model)),
+                       BIC = c(BIC(ardl_temp$model), BIC(ardl_rain$model), BIC(ardl_rad$model), BIC(ardl_humd$model)), 
+                       MASE = c(MASE(ardl_temp)$MASE, MASE(ardl_rain)$MASE, MASE(ardl_rad)$MASE, MASE(ardl_humd)$MASE))
+
+results_ardl_task2 <- results_ardl_task2[order(results_ardl_task2$MASE), ]
+print(results_ardl_task2)
+```
+
+* Relative humidity (MASE = 0.516, AIC = 254.74, BIC = 271.10) produced the lowest forecast error, suggesting it has the strongest influence on FFD among the predictors
+
+*Analysis of best model*
+```{r}
+summary(ardl_humd)
+checkresiduals(ardl_humd)
+vif(ardl_humd$model)
+```
+
+* The ARDL(5,5) model shows that most lag coefficients are statistically insignificant, with p-values > 0.05, meaning past humidity and FFD values have weak short-term effects on current flowering.
+* Most lag coefficients for humidity (X.t to X.5) are negative, meaning higher humidity in the current and previous years tends to accelerate flowering. Specifically, the third lag (X.3 = -15.03) has the strongest negative effect and is marginally significant (p = 0.069), implying that humidity conditions from about three years earlier can lead to earlier flowering
+* The R² = 0.33 indicates that about 33% of the variation in FFD is explained by the model, though the adjusted R² is negative, showing possible overfitting due to many lag terms.
+* The residual diagnostics show that residuals are approximately normal and not autocorrelated (Ljung-Box p = 0.86), indicating that the model errors behave randomly — a good sign of model adequacy.
+* The VIF values (< 2) confirm no multicollinearity, meaning lagged predictors are not excessively correlated with each other.
+
+*Forecasting*
+```{r}
+ardl_humd=ardlDlm(formula=FFD~RelHumidity , data = task2 , p=5 , q=4)
+forecast_bound_ardl <- dLagM::forecast(model=ardl_humd,x=c(94.45,94.03,95.04,95.06) ,h = 4, interval=TRUE)
+forecast_bound_ardl
+forecast_ardl <- dLagM::forecast(model=ardl_humd,x=c(94.45,94.03,95.04,95.06) ,h = 4)
+
+plot(ts(c(as.vector(FFD),forecast_finite$forecasts),start=1984),type="o",col="blue", ylab="FFD_forecasted",
+main="FFD four year ahead predicted values from 2015-2018 - DLM")
+lines(ts(c(as.vector(FFD),forecast_poly$forecasts),start=1984),type="o",col="darkmagenta")
+lines(ts(c(as.vector(FFD), forecast_koyck$forecasts), start=1984), type="o", col="olivedrab")
+lines(ts(c(as.vector(FFD),forecast_ardl$forecasts),start=1984),type="o",col="purple4")
+lines(ts(as.vector(FFD),start=1984),col="black",type="o")
+legend("bottomleft", lty = 1,pch=1,text.width=11, col = c("blue","darkmagenta","olivedrab","purple4","black"), c("Finite DLM","Poly DLM","Koyck DLM","ARDL DLM","Data (FFD)"))
+```
+
+### Dynamic Linear Models
+*Model selection*
+```{r}
+# Define variables and model formulas to test
+variables <- c("temp", "rain", "rad", "humd")
+
+formulas <- list(
+  FFD ~ X + L(FFD, k=1),
+  FFD ~ X + L(FFD, k=2),
+  FFD ~ X,
+  FFD ~ X - 1,
+  FFD ~ X + L(X, k=1),
+  FFD ~ X + L(X, k=2),
+  FFD ~ X + L(X, k=3),
+  FFD ~ X + L(FFD, k=3)
+)
+
+# Create results table
+results <- data.frame()
+
+for (var in variables) {
+  for (f in formulas) {
+    # Replace X in formula with actual variable name
+    f_new <- as.formula(gsub("X", var, deparse(f)))
+    
+    # Fit model
+    model <- dynlm(f_new)
+    
+    # Store stats
+    results <- rbind(results, data.frame(
+      Variable = var,
+      Formula = deparse(f_new),
+      AIC = AIC(model),
+      BIC = BIC(model),
+      MASE = MASE(lm(model))$MASE
+    ))
+  }
+}
+
+# Print results neatly
+results <- results[order(results$MASE), ]
+print(results, row.names = FALSE)
+```
+
+
+* The model selection procedure systematically tested multiple dynamic regression specifications to identify which combination of predictor variable and lag structure best explains flowering first day (FFD)
+* The best model across all combinations was FFD ~ humd + L(humd, k=3), with the lowest MASE (0.607), AIC (258.42), and BIC (263.75)
+
+*Analysis best model*
+```{r}
+dynlm_humd <- dynlm(FFD ~ humd + L(humd, k=3))
+summary(dynlm_humd)
+checkresiduals(dynlm_humd)
+```
+
+* The current humidity (humd) has a small negative but non-significant coefficient (–4.66, p = 0.395), indicating little immediate effect on flowering
+* The third lag of humidity (L(humd, k=3)) is negative and significant (–12.28, p = 0.0316), implying that higher humidity three years earlier leads to earlier flowering (lower FFD)
+* The R² (0.18) suggests that about 18% of FFD variation is explained by current and lagged humidity, which is reasonable for environmental data.
+* The Breusch–Godfrey test (p = 0.27) and residual ACF confirm that no significant autocorrelation remains, meaning the model residuals are independent and well-behaved.
+* The residual analysis supports the model’s adequacy and independence of errors, suggesting this specification is a good fit for capturing delayed humidity effects on flowering.
+
+*Forecasting*
+```{r}
+par(mfrow=c(1,1))
+plot(FFD,ylab='FFD',xlab='Year',main = "Fit with original FFD", col="blue")
+lines(dynlm_humd$fitted.values,col="black")
+legend("topleft", lty = 1,pch=1,text.width=11, col = c("black","blue"), c("Data","dynamicmodel3"))
+
+future_humd <- c(94.45, 94.03, 95.04, 95.06)
+q <- length(future_humd)
+n <- nrow(dynlm_humd$model)
+
+future_data <- data.frame(
+  humd = future_humd,
+  `L(humd, 3)` = humd[(n-2):(n-2+q-1)]  # use lag-3 values from the past data
+)
+
+# Generate forecasts with confidence intervals
+pred <- predict(dynlm_humd, newdata = future_data, interval = "confidence", level = 0.95)
+
+# Combine results
+forecast_table <- data.frame(
+  Year = (2015:(2015 + q - 1)),
+  Lower_95 = pred[, "lwr"],
+  Forecast = pred[, "fit"],
+  Upper_95 = pred[, "upr"]
+)
+
+print(forecast_table)
+
+# Plot forecast
+plot(FFD, xlim=c(1984, 2019),
+     ylab='FFD', xlab='Year',
+     main="Forecasted FFD values with 95% CI - Dynamic Model",
+     col="blue", type="o")
+lines(ts(pred[, "fit"], start=c(2015)), col="black", type="o")
+lines(ts(pred[, "lwr"], start=c(2015)), col="red", lty=2)
+lines(ts(pred[, "upr"], start=c(2015)), col="red", lty=2)
+legend("topleft", lty=c(1,2), col=c("black","red"),
+       legend=c("Forecast", "95% CI"))
+```
+
+### Exponential smoothing
+
+* The Holt–Winters model was not used because the FFD time series shows no clear trend or seasonal pattern. Simple Exponential Smoothing (SES) was more appropriate, as it captures the level of a non-trending, non-seasonal series efficiently
+*Model selection*
+```{r}
+ses_1 <- ses(FFD, alpha = 0.1, initial = "simple", h=4)
+ses_2 <- ses(FFD, alpha = 0.8, initial = "simple", h=4)
+ses_3 <- ses(FFD, h=4)
+
+# Compute error measures
+acc_1 <- accuracy(ses_1)
+acc_2 <- accuracy(ses_2)
+acc_3 <- accuracy(ses_3)
+
+# Combine into a single comparison table
+comparison <- rbind(
+  SES_0.1 = acc_1[1, ],  # training set metrics
+  SES_0.8 = acc_2[1, ],
+  SES_opt = acc_3[1, ]
+)
+
+# Round for readability
+comparison <- round(comparison, 2)
+
+comparison
+```
+
+* The Simple Exponential Smoothing (SES) model selection compares three smoothing parameter (α) settings to identify the most accurate and stable forecast for FFD
+* The optimized SES model (SES_opt) is the best-performing specification. It provides the most accurate and unbiased forecast for FFD, balancing smoothness and responsiveness to recent trends.
+
+*Analysis of the best model*
+```{r}
+summary(ses_3)
+```
+
+* The a (alpha) value is extremely low (a = 1e-04), indicating that the level of the series is highly stable with minimal short-term fluctuations.
+* The initial level (l = 209.45) represents the baseline forecast, which stays constant for future years (2015–2018).
+* The AIC (306.95) and MASE (0.66) are relatively low, suggesting a good fit and reliable short-term forecast performance.
+* The residual autocorrelation (ACF1 = -0.006) is close to zero, confirming no remaining serial correlation.
+
+*Forecasting*
+```{r}
+plot(ses_3, plot.conf=FALSE, ylab=" Freight cars", xlab="Year", main= "FFD series with 4-year ahead forecasts - Exponential Smoothing", type="o") 
+lines(fitted(ses_3), col="green", type="l") 
+lines(ses_3$mean, col="green", type="l") 
+legend("bottomleft",lty=1, col=c(1,"green"),  c("data", (alpha = 0.0001)),pch=1)
+```
+
+### State-space models
+
+* These two models were chosen because they are the most appropriate state-space (ETS) structures for a stationary series without trend or seasonality, allowing a fair comparison between additive and multiplicative error dynamics while keeping the model simple
+*Model selection*
+```{r}
+ssm_ANN <-ets(FFD, model="ANN")
+ssm_MNN <-ets(FFD, model="MNN")
+
+# Compute error measures
+comp1 <- accuracy(ssm_ANN)
+comp2 <- accuracy(ssm_MNN)
+
+# Combine into a single comparison table
+comparison_ssm <- rbind(
+  SSM_ANN = comp1[1, ],  # training set metrics
+  SSM_MNN = comp2[1, ]
+)
+
+# Round for readability
+comparison_ssm <- round(comparison_ssm, 2)
+
+comparison_ssm
+```
+
+* Both models performed equally well because the FFD data has no trend or seasonality, which means the distinction between additive (ANN) and multiplicative (MNN) error structures had no practical impact. Therefore, the simpler ssm_ANN (additive) model can be more preferred
+
+*Analysis of best model*
+```{r}
+summary(ssm_ANN)
+checkresiduals(ssm_ANN)
+```
+
+* The ETS(A,N,N) model gave a strong fit for the FFD data. The smoothing parameter (α = 1e−04) indicates a nearly constant level, meaning new data points have little effect on forecasts — matching the stable nature of the series. The level (209.45) represents the average FFD value, and the error standard deviation (23.81) shows moderate variation. Both AIC (306.95) and BIC (311.25) suggest a good balance between fit and simplicity. The low MASE (0.66) and MAPE (9.17%) confirm accurate predictions, while the near-zero ACF1 implies no autocorrelation in residuals. The residuals appear random, normally distributed, and uncorrelated, confirming that the model effectively captures the data pattern and produces unbiased forecasts.
+* This ETS(A,N,N) model captures the constant mean level and random short-term fluctuations of FFD effectively. Since there is no trend or seasonality, this simple exponential model is statistically appropriate and avoids unnecessary complexity, ensuring robust, stable forecasts.
+
+*Forecasting*
+```{r}
+fc_ANN <- forecast(ssm_ANN, h = 4)
+
+# Plot original series and fitted values
+plot(FFD, col = "black", type = "o",
+     main = "FFD series with 4-year ahead forecasts - ANN model",
+     ylab = "FFD", xlab = "Year", xlim = c(1984, 2018))
+
+# Add fitted values from the model
+lines(fitted(ssm_ANN), col = "red", lwd = 2)
+
+# Add forecasts with confidence intervals
+lines(fc_ANN$mean, col = "blue", lwd = 2)
+lines(fc_ANN$lower[,2], col = "blue", lty = 2)  # 95% lower
+lines(fc_ANN$upper[,2], col = "blue", lty = 2)  # 95% upper
+
+# Add legend
+legend("topleft", lty = c(1,1,2), col = c("black","blue","blue"),
+       legend = c("Data","Forecast (ANN)","95% CI"))
+
+```
+
+### Discussion
+*Comparison table*
+```{r}
+final_results_task2 <- data.frame(Model = c("Finite","Poly","Koyck","Autoregressive", "Dynamic", "Exponential Smoothing", "State-space Model"),
+                          AIC = c(AIC(finite_rain), AIC(poly_rain), AIC(koyck_rad),AIC(ardl_humd),AIC(dynlm_humd), ses_3$model$aic, ssm_ANN$aic),
+                          BIC = c(BIC(finite_rain), BIC(poly_rain), BIC(koyck_rad),BIC(ardl_humd),BIC(dynlm_humd), ses_3$model$bic, ssm_ANN$bic),
+                          MASE= c(MASE(finite_rain)$MASE, MASE(poly_rain)$MASE ,MASE(koyck_rad)$MASE, MASE(ardl_humd)$MASE, MASE(lm(dynlm_humd))$MASE, accuracy(ses_3)[,"MASE"][1], accuracy(ssm_ANN)[,"MASE"][1]))
+
+final_results_task2 <- final_results_task2[order(final_results_task2$MASE), ]
+print(final_results_task2)
+```
+
+* The Finite Distributed Lag (Finite DLM) model is the most optimal for forecasting the FFD series. It achieves the lowest AIC (197.72), BIC (211.30), and MASE (0.39) among all tested models, indicating the best overall fit and forecasting accuracy.
+* The Exponential Smoothing and State-space (ANN/MNN) models performed adequately but assume no trend or seasonality and thus yield flat forecasts, limiting their ability to reflect subtle fluctuations in FFD. While their residuals were well-behaved, their high AIC/BIC values (~307 and ~311) indicate inferior fit relative to DLMs.
+* Overall, the Finite DLM balances statistical performance and interpretability. Its residuals are random and normally distributed, forecasts follow observed data patterns, and confidence intervals remain realistic. Therefore, supported by the lowest information criteria and MASE, it stands as the most statistically reliable model for forecasting future FFD values.
+
+## Task 3: FFD vs RBO
+### Data Decription
+The dataset used in this analysis originates from Hudson & Keatley (2021) and investigates the influence of long-term climate change on the flowering order similarity (RBO) of 81 plant species in Victoria, Australia, over the period 1983–2014.
+The dataset also includes four independent climate variables, each represented as an annual average from 1984 to 2014:
+
+* Temperature
+* Rainfall
+* Radiation
+* Relative Humidity
+For forecasting purposes, an additional dataset titled Covariate x-values for Task 3 provides future climate covariates to predict upcoming RBO values and assess potential impacts of future climate shifts on flowering order similarity.
+
+### Data Preparation
+
+* The dataset will be imported into R and prepare before modelling
+```{r}
+task3 <- read.csv("RBO.csv") #import dataset
+task3_co <- read.csv("Covariate_3.csv") #import dataset
+head(task3) # data display
+head(task3_co) # data display
+str(task3) # data structure
+colSums(is.na(task3)) # check NA values
+```
+```{r}
+task3_co <- na.omit(task3_co) # remove NA values
+head(task3_co) # check the dataset
+
+# Convert to time series object
+RBO <- ts(task3$RBO, start = c(1984,1), frequency = 1)
+tmp <- ts(task3$Temperature, start = c(1984,1), frequency = 1)
+rnf <- ts(task3$Rainfall, start = c(1984,1), frequency = 1)
+rdn <- ts(task3$Radiation, start = c(1984,1), frequency = 1)
+hmd <- ts(task3$RelHumidity, start = c(1984,1), frequency = 1)
+data_task3 <-ts(task3[,2:6], start = c(1984,1), frequency = 1)
+```
+
+* The dataset was cleaned and structured into time series format suitable for analysis. Missing values were removed
+
+### Data Exploration
+**RBO**
+```{r}
+plots(RBO,"RBO","steelblue3")
+```
+
+**Time series pattern**
+The time series of RBO shows moderate fluctuations throughout the 31-year period
+
+* The overall pattern suggests a gradual decline in similarity, meaning flowering order has become less consistent with the 1983 baseline
+* Short-term variability is evident, but no strong cyclical or seasonal pattern appears
+* The series displays moderate year-to-year variation, possibly reflecting irregular climatic changes rather than systematic trends
+* Variance remains relatively stable, with occasional dips corresponding to years of lower similarity
+
+**Stationary**
+
+* The ACF plot shows a slow decay of autocorrelation across several lags, indicating persistence and suggesting the presence of a trend component.
+* The ADF test statistic (–0.32) is higher than the 5% critical value (–1.95), with a p-value greater than 0.05.
+=> Both the visual inspection and statistical test confirm that the RBO series is non-stationary
+
+**Temperature**
+```{r}
+plots(tmp,"Temperature","orangered3")
+```
+
+**Time series pattern**
+The time series of Temperature from 1984 to 2014 shows noticeable fluctuations and a gradual upward movement toward later years
+
+* The series shows an increasing long-term trend, particularly after 2005
+* Short-term variations appear
+* Variance is relatively stable, showing that fluctuations are consistent throughout the observation period
+* No distinct cyclic pattern is present, implying that temperature changes are more irregular than periodic
+
+**Stationary**
+
+* The ACF plot shows positive autocorrelation in early lags that slowly decays, indicating persistence and confirming that temperature values are correlated over time
+* The ADF test statistic (0.45) is greater than the 5% critical value (–1.95) and has a p-value > 0.05
+=> Both visual and statistical evidence confirm that the temperature series is non-stationary
+
+**Rainfall**
+```{r}
+plots(rnf,"Rainfall","midnightblue")
+```
+
+**Time series pattern**
+The time series of Rainfall from 1984 to 2014 shows no consistent long-term trend
+
+* The rainfall fluctuates considerably from year to year
+* There is no clear upward or downward trend, suggesting that rainfall levels have remained generally stable over time
+* Variability is moderate, with a few years showing sharper drops
+* No regular seasonal or cyclical pattern is visible
+
+**Stationary**
+
+* The ACF plot reveals low and short-lived autocorrelation
+* The ADF test statistic (–0.45) is greater than the 5% critical value (–1.95), with a p-value above 0.05
+=> Together, the ACF pattern and statistical test confirm that the rainfall series is non-stationary
+
+**Radiation**
+```{r}
+plots(rdn,"Radiation","tomato")
+```
+
+**Time series pattern**
+
+* The radiation levels fluctuate slightly, showing alternating high and low periods throughout the observation
+* The values remain relatively stable around a consistent mean, with short-term dips in the early 1990s and again around 2010
+* No clear upward or downward trend is evident, though there are small multi-year cycles
+* Variance remains stable
+
+**Stationary**
+
+* The ACF plot displays moderate positive autocorrelation at early lags, followed by alternating positive and negative correlations, suggesting some short-term persistence
+* The ADF test statistic is greater than the 5% critical value (–1.95), and the p-value is above 0.05
+=> Both visual and statistical evidence indicate that the radiation series is non-stationary
+
+**Relative humidity**
+```{r}
+plots(hmd,"Relative Humidity","hotpink3")
+```
+
+**Time series pattern**
+
+* Humidity levels vary slightly from year to year but remain mostly stable around a mean
+* Occasional peaks and dips occur but they are short-lived
+* There is no evident upward or downward trend
+* Variance appears uniform, meaning yearly changes are consistent and not widening or narrowing over time
+
+**Stationary**
+
+* The ACF plot reveals only weak autocorrelation across lags, suggesting minimal persistence between consecutive years
+* The ADF test statistic (–0.16) is higher than the 5% critical value (–1.95), and the p-value is greater than 0.05
+=> Both the ACF and ADF results confirm that the relative humidity series is non-stationary
+
+##### Differencing
+###### RBO
+```{r}
+RBO_diff = diff(RBO)
+acf(RBO_diff)
+adf.test(RBO_diff)
+```
+
+* The first differencing doesn't help achieving the stationary so the second was applied
+
+*Second differencing*
+```{r}
+RBO_diff2 = diff(RBO_diff)
+acf(RBO_diff2)
+adf.test(RBO_diff2)
+```
+
+* The second differencing doesn't help achieving the stationary showed by ADF test so the third was applied
+*Third differencing*
+```{r}
+RBO_diff3 = diff(RBO_diff2)
+acf(RBO_diff3)
+adf.test(RBO_diff3)
+```
+
+* The ACF plot shows no significant autocorrelation at any lag
+* The ADF test statistic (–4.02) is lower than the 5% critical value, with a p-value of 0.0219, meaning the null hypothesis of a unit root is rejected.
+=> The transformed series has achieved stationarity
+
+##### Temperature
+```{r}
+tmp_diff = diff(tmp)
+acf(tmp_diff)
+adf.test(tmp_diff)
+```
+
+* After the first differencing, this series hasn't achieved the stationary so the second one was applied
+*Second differencing*
+```{r}
+tmp_diff2 = diff(tmp_diff)
+acf(tmp_diff2)
+adf.test(tmp_diff2)
+```
+
+* The ACF plot shows that all autocorrelation coefficients fall within the confidence limits, with no significant spikes
+* The ADF test yields a test statistic of –3.71 with a p-value of 0.0408, which is below the 5% significance level
+=> Temperature series is stationary
+
+##### Rainfall
+```{r}
+rnf_diff = diff(rnf)
+acf(rnf_diff)
+adf.test(rnf_diff)
+```
+
+* The ACF plot shows no significant autocorrelation across most lags, with all bars lying within the confidence bounds
+* The ADF test shows a test statistic of –3.77 with a p-value of 0.036, which is below the 5% significance level
+=> The rainfall series becomes stationary after first differencing
+
+##### Radiation
+```{r}
+rdn_diff = diff(rdn)
+acf(rdn_diff)
+adf.test(rdn_diff)
+```
+*Second differencing*
+```{r}
+rdn_diff2 = diff(rdn_diff)
+acf(rdn_diff2)
+adf.test(rdn_diff2)
+```
+*Third differencing*
+```{r}
+rdn_diff3 = diff(rdn_diff2)
+acf(rdn_diff3)
+adf.test(rdn_diff3)
+```
+
+* The radiation only achieved the stationarity after third-order differencing
+* The ACF plot shows minimal autocorrelation across lags, with all spikes falling within the confidence bands
+* The ADF test reports a test statistic of –4.16 with a p-value of 0.0171, which is below the 5% significance level.
+=> The radiation series has achieved stationarity
+
+##### RelHumidity
+```{r}
+hmd_diff = diff(hmd)
+acf(hmd_diff)
+adf.test(hmd_diff)
+```
+*Second differencing*
+```{r}
+hmd_diff2 = diff(hmd_diff)
+acf(humd_diff2)
+adf.test(hmd_diff2)
+```
+
+* It took humidity object two differencing to be stationary
+* The ACF plot shows that all autocorrelations fall within the 95% confidence bands, and no clear lag dependence remains
+* The ADF test test statistic is –3.97 with a p-value of 0.0236, which is below the 5% significance level.
+=> The relative humidity series is stationary
+
+##### Correlation
+```{r}
+cor(data_task3)
+```
+
+* Rainfall appears to be the most influential climatic factor affecting the similarity of flowering order with a positive relationship (0.39), while temperature (0.26) and radiation (-0.32) also play moderate roles. The weak correlations with humidity (-0.18) suggest it may have a limited direct effect on flowering sequence changes. These results highlight that moisture-related variables may have a stronger influence on long-term flowering order dynamics in Victoria.
+
+### Task 3a
+#### Fitting models
+##### Finite DLM
+**Lag selection**
+*Temperature*
+```{r}
+finiteDLMauto(x=as.vector(tmp), y=as.vector(RBO), q.min=1, q.max=10, model.type="dlm", error.type="MASE", trace=TRUE)
+```
+
+* The 10-lag model shows slightly lower forecast error, the 5-lag model is preferred because it provides a more parsimonious fit with the lowest AIC and higher adjusted R²
+
+*Rainfall*
+```{r}
+finiteDLMauto(x=as.vector(rnf), y=as.vector(RBO), q.min=1, q.max=10, model.type="dlm", error.type="MASE", trace=TRUE)
+```
+
+* Although rainfall models with shorter or longer lags (e.g., 1 or 10) show some individual metric advantages, the 6-lag model achieves the best trade-off between accuracy and simplicity.
+
+*Radiation*
+```{r}
+finiteDLMauto(x=as.vector(rdn), y=as.vector(RBO), q.min=1, q.max=10, model.type="dlm", error.type="MASE", trace=TRUE)
+```
+
+* Lag 8 provides the best overall trade-off, with a relatively low MASE (0.71), moderate AIC/BIC, and independent residuals (Ljung–Box p = 0.20). The 8-lag model is selected as optimal for radiation
+
+*Humidity*
+```{r}
+finiteDLMauto(x=as.vector(humd), y=as.vector(RBO), q.min=1, q.max=10, model.type="dlm", error.type="MASE", trace=TRUE)
+```
+
+* Among models, humidity with q=10 is the best trade-off between accuracy and parsimony
+
+*Model fitting with univariate predictions*
+```{r}
+#Temp as predictor
+finite_tmp <-dlm(x=as.vector(tmp), y=as.vector(RBO), q=5)
+#Rainfall as predictor
+finite_rnf <-dlm(x=as.vector(rnf), y=as.vector(RBO), q=6)
+#Radiation as predictor
+finite_rdn <-dlm(x=as.vector(rdn), y=as.vector(RBO), q=8)
+#RelHumidity as predictor
+finite_hmd <-dlm(x=as.vector(hmd), y=as.vector(RBO), q=10)
+```
+
+*Evaluate models*
+```{r}
+# comparison table
+results_finite_task3 <- data.frame (Model = c("temp", "rain", "rad", "humd"),
+                       AIC = c(AIC(finite_tmp$model), AIC(finite_rnf$model), AIC(finite_rdn$model), AIC(finite_hmd$model)),
+                       BIC = c(BIC(finite_tmp$model), BIC(finite_rnf$model), BIC(finite_rdn$model), BIC(finite_hmd$model)), 
+                       MASE = c(MASE(finite_tmp)$MASE, MASE(finite_rnf)$MASE, MASE(finite_rdn)$MASE, MASE(finite_hmd)$MASE))
+
+results_finite_task3 <- results_finite_task3[order(results_finite_task3$MASE), ]
+print(results_finite_task3)
+```
+
+* Among all climate variables, humidity provides the best-performing finite distributed lag model, combining strong model fit with the highest forecast accuracy
+
+*Analysis of best model*
+```{r}
+summary(finite_hmd)
+```
+
+* The intercept (–3.35) represents the baseline RBO level when past humidity effects are absent, indicating an average level of flowering order similarity independent of humidity
+* Positive coefficients (e.g., at lags 2, 5, 7, 8, and 10) suggest that higher humidity in those previous years tends to increase RBO, implying more consistent flowering order and greater similarity to the baseline year
+* Negative coefficients (e.g., at lags 1, 3, 4, and 9) indicate that elevated humidity in those years is associated with lower RBO values, reflecting more variability and less synchronized flowering.
+* Marginally significant lags were identified at lag 2 (p = 0.056) and lag 5 (p = 0.073), suggesting these periods have the strongest delayed effects of humidity on flowering order similarity
+* The adjusted R² = 0.17 and overall p-value = 0.33 suggest that while some lagged humidity effects are individually important, their combined impact is moderate
+
+```{r}
+checkresiduals(finite_hmd)
+vif(finite_hmd$model)
+```
+
+* Residual diagnostics confirm the model’s validity: residuals fluctuate randomly around zero, with no trend or pattern
+* ACF spikes lie within confidence limits, indicating no serial correlation (Ljung–Box p = 0.26)
+* Residuals follow a roughly normal distribution, showing unbiased errors
+
+##### Forecasting of best model
+```{r}
+x.new3 = matrix(c(94.45,94.03,95.04), ncol=3, nrow=1)
+finite_rnf <-dlm(formula=RBO ~ RelHumidity , data = task3, q=10)
+forecast_bound3 <-dLagM::forecast(model = finite_rnf,x=x.new3,h=3,interval = TRUE)
+forecast_bound3
+forecast_finite3 <- dLagM::forecast(model=finite_rnf, x=x.new3, h=3)
+
+Lower <- ts(forecast_bound3$forecasts$Lower, start = 2015)
+Upper <- ts(forecast_bound3$forecasts$Upper, start = 2015)
+
+plot(ts(c(as.vector(RBO),forecast_finite3$forecasts),start=1984),type="o",col="blue", ylab="RBO_forecasted",
+main="RBO three year ahead predicted values from 2015-2017",)
+lines(ts(as.vector(RBO),start=1984),col="black",type="o")
+lines(Lower, col = "red", lty = 2)
+lines(Upper, col = "red", lty = 2)
+polygon(
+  x = c(time(Lower), rev(time(Upper))),
+  y = c(Lower, rev(Upper)),
+  col = rgb(1, 0, 0, 0.2),
+  border = NA
+)
+legend("bottomleft", lty = 1,pch=1,text.width=11, col = c("blue","black"), c("Finite DLM","Data (RBO)"))
+
+```
+
+##### Polynomial DLM
+*Fitting*
+```{r}
+#fitting polynomial DLM
+poly_tmp <-polyDlm(x=as.vector(tmp), y=as.vector(RBO), q=5, k=2)
+poly_rnf <-polyDlm(x=as.vector(rnf), y=as.vector(RBO), q=6, k=2)
+poly_rdn <-polyDlm(x=as.vector(rdn), y=as.vector(RBO), q=8, k=2)
+poly_hmd <-polyDlm(x=as.vector(hmd), y=as.vector(RBO), q=10, k=2)
+```
+*Evaluate models*
+```{r}
+# comparison table
+results_poly_task3 <- data.frame (Model = c("temp", "rain", "rad", "humd"),
+                       AIC = c(AIC(poly_tmp$model), AIC(poly_rnf$model), AIC(poly_rdn$model), AIC(poly_hmd$model)),
+                       BIC = c(BIC(poly_tmp$model), BIC(poly_rnf$model), BIC(poly_rdn$model), BIC(poly_hmd$model)), 
+                       MASE = c(MASE(poly_tmp)$MASE, MASE(poly_rnf)$MASE, MASE(poly_rdn)$MASE, MASE(poly_hmd)$MASE))
+
+results_poly_task3 <- results_poly_task3[order(results_poly_task3$MASE), ]
+print(results_poly_task3)
+```
+
+* Among the models, humidity (AIC = –85.61, BIC = –80.39, MASE = 0.68) achieved the lowest MASE value, indicating the most accurate forecasts
+
+*Analysis of best model*
+```{r}
+summary(poly_hmd)
+```
+
+* The intercept (–1.61) indicates a near-zero baseline effect when humidity influence is absent, but it’s statistically insignificant (p = 0.62).
+* None of the humidity lags (z.t0, z.t1, z.t2) were significant (all p > 0.7), suggesting humidity has minimal short- or delayed impact on flowering order similarity.
+* The model’s R² = 0.045 and adjusted R² = –0.12 indicate that it explains almost none of the variation in RBO, and the adjusted R² being negative implies overfitting.
+* The F-statistic (p = 0.85) confirms the model is not statistically significant overall.
+=> These results suggest that humidity is not an influential predictor for RBO within this time frame, and the model’s predictive reliability is poor. Radiation was selected as the better polynomial DLM predictor for forecasting RBO
+
+```{r}
+summary(poly_rdn)
+checkresiduals(poly_rdn)
+```
+
+* The intercept (0.856) represents the baseline RBO similarity when radiation has no effect, indicating a moderate average similarity between flowering orders
+* Current radiation (z.t0) has a negative significant effect (p = 0.024), meaning higher radiation decreases flowering order similarity. Lag 1 (z.t1) has a positive significant effect (p = 0.034), indicating previous-year radiation increases similarity. Lag 2 (z.t2) is slightly negative (p = 0.07), showing a weak delayed effect.
+* The model explains 31% of variation (R² = 0.31), with an overall moderate significance (p = 0.062)
+* Residual diagnostics (ACF and histogram) show that residuals are approximately normally distributed and uncorrelated, confirming model adequacy
+
+*Forecasting*
+```{r}
+forecast_poly3 <- dLagM::forecast(poly_rdn,x = c(14.6,14.56,14.79) ,h = 3)
+plot(ts(c(as.vector(RBO),forecast_finite3$forecasts),start=1984),type="o",col="blue", ylab="RBO_forecasted",
+main="RBO three year ahead predicted values from 2015-2017",)
+lines(ts(c(as.vector(RBO),forecast_poly3$forecasts),start=1984),type="o",col="darkmagenta")
+lines(ts(as.vector(RBO),start=1984),col="black",type="o")
+legend("bottomleft", lty = 1,pch=1,text.width=10, col = c("blue","darkmagenta","black"), c("Finite DLM","Poly DLM","Data (RBO)"))
+```
+
+##### Koyck transformation
+*Fitting*
+```{r}
+# fitting koyck transformation model
+koyck_tmp <-koyckDlm(x=as.vector(tmp), y=as.vector(RBO))
+koyck_rnf <-koyckDlm(x=as.vector(rnf), y=as.vector(RBO))
+koyck_rdn <-koyckDlm(x=as.vector(rdn), y=as.vector(RBO))
+koyck_hmd <-koyckDlm(x=as.vector(hmd), y=as.vector(RBO))
+```
+*Evaluate models*
+```{r}
+results_koyck_task3 <- data.frame (Model = c("temp", "rain", "rad", "humd"),
+                       AIC = c(AIC(koyck_tmp), AIC(koyck_rnf), AIC(koyck_rdn), AIC(koyck_hmd)),
+                       BIC = c(BIC(koyck_tmp), BIC(koyck_rnf), BIC(koyck_rdn), BIC(koyck_hmd)), 
+                       MASE = c(MASE(koyck_tmp, koyck_rnf, koyck_rdn, koyck_hmd)))
+results_koyck_task3
+```
+
+* Overall, the koyck method doesn't show a positive result. Humidity (Koyck model) performs the best overall — lowest AIC and BIC indicate it fits the data most efficiently with fewer residual errors.
+
+*Analysis of best model*
+```{r}
+summary(koyck_hmd, diagnostic=TRUE)
+checkresiduals(koyck_hmd$model)
+vif(koyck_hmd$model)
+```
+
+* The intercept (–1.17) is not significant (p = 0.89), indicating no strong baseline effect.
+* The lagged dependent variable (Y.1) has a positive and marginally significant coefficient (0.625, p = 0.083), meaning current RBO values depend moderately on past RBO, showing persistence over time.
+* The current humidity (X.t) has a positive but non-significant effect (p = 0.855), implying humidity changes this year do not immediately affect RBO.
+* The geometric coefficient (0.625) indicates a moderate decay rate of past effects, previous humidity influences diminish gradually across time.
+* Residuals appear random and roughly normal (confirmed by ACF and Ljung-Box p = 0.33), indicating a good model fit.
+
+*Forecasting*
+```{r}
+forecast_bound_koyck3 <- dLagM::forecast(model=koyck_hmd,x=x.new3 ,h = 3, interval=TRUE)
+forecast_bound_koyck3
+forecast_koyck3 <- dLagM::forecast(model=koyck_hmd,x=x.new3 ,h = 3)
+
+plot(ts(c(as.vector(RBO),forecast_finite3$forecasts),start=1984),type="o",col="blue", ylab="RBO_forecasted",
+main="RBO three year ahead predicted values from 2015-2018")
+lines(ts(c(as.vector(RBO),forecast_poly3$forecasts),start=1984),type="o",col="darkmagenta")
+lines(ts(c(as.vector(RBO), forecast_koyck3$forecasts), start=1984), type="o", col="olivedrab")
+lines(ts(as.vector(RBO),start=1984),col="black",type="o")
+legend("bottomleft", lty = 1,pch=1,text.width=10, col = c("blue","darkmagenta","olivedrab","black"), c("Finite DLM","Poly DLM","Koyck DLM","Data (RBO)"))
+```
+
+##### ARDL DLM
+**Lag selection**
+```{r}
+# Define predictors
+predictors <- list(
+  temp = as.vector(tmp),
+  rain = as.vector(rnf),
+  rad  = as.vector(rdn),
+  humd = as.vector(hmd)
+)
+
+# Loop over each variable and all p, q combinations
+for (var_name in names(predictors)) {
+  cat("\n===== Variable:", var_name, "=====\n")
+  
+  for (i in 1:5) {
+    for (j in 1:5) {
+      model.autoreg <- ardlDlm(
+        x = predictors[[var_name]],
+        y = as.vector(RBO),
+        p = i,
+        q = j
+      )
+      
+      # Print results
+      cat(
+        "p =", i,
+        "q =", j,
+        "AIC =", round(AIC(model.autoreg$model), 3),
+        "BIC =", round(BIC(model.autoreg$model), 3),
+        "MASE =", round(MASE(model.autoreg)$MASE, 3), "\n"
+      )
+    }
+  }
+}
+```
+
+* Temperature (3,2): this combination achieves the lowest AIC (best overall fit) with a relatively low MASE, meaning it performs well both statistically and predictively.
+* Rainfall (5,3): While AIC is not the absolute minimum, this model gives the best forecast accuracy (lowest MASE), with still competitive AIC and BIC
+* Radiation (3,5): This model has the lowest MASE and strong AIC/BIC performance
+* Humidity (5,2): It provides the best trade-off between fit and simplicity, with minimal loss in forecast accuracy
+
+*Fitting model*
+```{r}
+ardl_tmp <- ardlDlm(x=as.vector(tmp), y=as.vector(RBO), p=3, q=2)
+ardl_rnd <- ardlDlm(x=as.vector(rnf), y=as.vector(RBO), p=5, q=3)
+ardl_rdn <- ardlDlm(x=as.vector(rdn), y=as.vector(RBO), p=3, q=5)
+ardl_hmd <- ardlDlm(x=as.vector(hmd), y=as.vector(RBO), p=5, q=2)
+```
+*Evaluate models*
+```{r}
+# comparison table
+results_ardl_task3 <- data.frame (Model = c("temp", "rain", "rad", "humd"),
+                       AIC = c(AIC(ardl_tmp$model), AIC(ardl_rnd$model), AIC(ardl_rdn$model), AIC(ardl_hmd$model)),
+                       BIC = c(BIC(ardl_tmp$model), BIC(ardl_rnd$model), BIC(ardl_rdn$model), BIC(ardl_hmd$model)), 
+                       MASE = c(MASE(ardl_tmp)$MASE, MASE(ardl_rnd)$MASE, MASE(ardl_rdn)$MASE, MASE(ardl_hmd)$MASE))
+
+results_ardl_task3 <- results_ardl_task3[order(results_ardl_task3$MASE), ]
+print(results_ardl_task3)
+```
+
+* Among all models, the humidity-based dynamic model (p = 5, q = 2) is selected as the most suitable overall. It demonstrates an excellent balance of model fit (AIC/BIC) and predictive accuracy (MASE)
+
+*Analysis of best model*
+*Humidity*
+```{r}
+summary(ardl_hmd)
+checkresiduals(ardl_hmd)
+vif(ardl_hmd$model)
+```
+
+* The intercept (–4.30, p = 0.09) is marginally significant, representing the baseline RBO level when humidity effects are absent
+* Current humidity (X.t = 0.0199, p = 0.06) has a positive, nearly significant effect, suggesting that higher humidity in the same year tends to increase RBO similarity slightly. The second lag (X.2 = 0.0193, p = 0.03) is statistically significant, showing that humidity from two years earlier has a clear and lasting positive influence on RBO
+* The fifth lag (X.5 = 0.0188, p = 0.05) also shows a delayed positive impact, while lags X.1, X.3, and X.4 are not significant, indicating minimal effect
+* The R² of 0.68 and adjusted R² of 0.53 indicate that over half of the variation in RBO is explained by the model. The overall model is statistically significant (F-statistic p = 0.004), and diagnostic tests show no serial correlation in the residuals (Ljung–Box p = 0.78).
+* The residual plots further confirm that the residuals are normally distributed and centered around zero
+
+*Forecasting*
+```{r}
+ardl_hmd=ardlDlm(formula=RBO~RelHumidity , data = task3 , p=5 , q=2)
+forecast_bound_ardl3 <- dLagM::forecast(model=ardl_hmd,x=x.new3 ,h = 3, interval=TRUE)
+forecast_bound_ardl3
+forecast_ardl3 <- dLagM::forecast(model=ardl_hmd,x=x.new3 ,h = 3)
+
+plot(ts(c(as.vector(RBO),forecast_finite3$forecasts),start=1984),type="o",col="blue", ylab="RBO_forecasted",
+main="RBO three year ahead predicted values from 2015-2017")
+lines(ts(c(as.vector(RBO),forecast_poly3$forecasts),start=1984),type="o",col="darkmagenta")
+lines(ts(c(as.vector(RBO), forecast_koyck3$forecasts), start=1984), type="o", col="olivedrab")
+lines(ts(c(as.vector(RBO),forecast_ardl3$forecasts),start=1984),type="o",col="purple4")
+lines(ts(as.vector(RBO),start=1984),col="black",type="o")
+legend("bottomleft", lty = 1,pch=1,text.width=10, col = c("blue","darkmagenta","olivedrab","purple4","black"), c("Finite DLM","Poly DLM","Koyck DLM","ARDL DLM","Data (RBO)"))
+```
+
+##### Dynamic Linear Models
+*Model selection*
+```{r}
+# Define variables and model formulas to test
+variables <- c("temp", "rain", "rad", "humd")
+
+formulas <- list(
+  RBO ~ X + L(RBO, k=1),
+  RBO ~ X + L(RBO, k=2),
+  RBO ~ X,
+  RBO ~ X - 1,
+  RBO ~ X + L(X, k=1),
+  RBO ~ X + L(X, k=2),
+  RBO ~ X + L(X, k=3),
+  RBO ~ X + L(RBO, k=3)
+)
+
+
+
+# Create results table
+results3 <- data.frame()
+
+for (var in variables) {
+  for (f in formulas) {
+    # Replace X in formula with actual variable name
+    f_new <- as.formula(gsub("X", var, deparse(f)))
+    
+    # Fit model
+    model <- dynlm(f_new)
+    
+    # Store stats
+    results3 <- rbind(results3, data.frame(
+      Variable = var,
+      Formula = deparse(f_new),
+      AIC = AIC(model),
+      BIC = BIC(model),
+      MASE = MASE(lm(model))$MASE
+    ))
+  }
+}
+
+# Print results neatly
+results3 <- results3[order(results3$MASE), ]
+print(results3, row.names = FALSE)
+```
+
+* The rainfall model (RBO ~ rain + L(RBO, 1)) has the lowest AIC (–106.85) and BIC (–101.24), indicating it achieves the best overall model fit among all models fitted
+
+*Analysis best model*
+```{r}
+dynlm_rdn <- dynlm(RBO ~ rad + L(RBO, k = 1))
+summary(dynlm_rdn)
+checkresiduals(dynlm_rdn)
+```
+
+* The lagged dependent variable (L(RBO, k = 1)) is positive and highly significant (β = 0.52, p = 0.004), indicating strong persistence, current RBO values are heavily influenced by previous ones
+* The radiation variable has a negative but statistically insignificant coefficient (β = –0.0198, p = 0.28), implying that short-term changes in solar radiation do not significantly affect flowering order similarity. However, the negative sign suggests that higher radiation may slightly reduce RBO values, meaning flowering orders become less similar
+* The model explains about 35% of the variation (R² = 0.35) and remains statistically significant overall (F = 7.27, p = 0.003). Diagnostic results (Breusch–Godfrey test p = 0.31) indicate no serial correlation, and residuals appear normally distributed and centered around zero
+
+*Forecasting*
+```{r}
+par(mfrow=c(1,1))
+plot(RBO,ylab='RBO',xlab='Year',main = "Fit with original RBO", col="blue")
+lines(dynlm_rdn$fitted.values,col="black")
+legend("topleft", lty = 1,pch=1,text.width=11, col = c("black","blue"), c("Data","Dynamic Model"))
+
+future_rdn <- c(14.6, 14.56, 14.79)
+q <- length(future_rdn)
+n <- nrow(dynlm_rdn$model)
+
+RBO_frc <- array(NA, (n + q))
+RBO_frc[1:n] <- RBO[2:length(RBO)]  # lagged alignment
+
+# Coefficients and variance
+coef_vec <- coef(dynlm_rdn)
+vcov_mat <- vcov(dynlm_rdn)
+sigma <- summary(dynlm_rdn)$sigma  # residual standard error
+
+# Prepare vectors for CI
+lower_95 <- numeric(q)
+upper_95 <- numeric(q)
+forecast_vals <- numeric(q)
+
+# Recursive forecast with confidence interval
+for (i in 1:q) {
+  # Regressor vector: intercept, rad, lag-1 RBO
+  x_new <- c(1, future_rdn[i], RBO_frc[n + i - 1])
+  
+  # Point forecast
+  fcast <- sum(coef_vec * x_new)
+  forecast_vals[i] <- fcast
+  
+  # Forecast variance and 95% CI
+  var_fcast <- t(x_new) %*% vcov_mat %*% x_new + sigma^2
+  se_fcast <- sqrt(var_fcast)
+  lower_95[i] <- fcast - 1.96 * se_fcast
+  upper_95[i] <- fcast + 1.96 * se_fcast
+  
+  # Update RBO_frc for next step
+  RBO_frc[n + i] <- fcast
+}
+
+# Combine into table
+forecast_table <- data.frame(
+  Year = 2015:(2015 + q - 1),
+  Lower_95 = lower_95,
+    Forecast = forecast_vals,
+  Upper_95 = upper_95
+)
+
+print(forecast_table)
+
+
+# Plot forecast
+plot(RBO, xlim=c(1984, 2018),
+     ylab='RBO', xlab='Year',
+     main="Forecasted RBO values with 95% CI",
+     col="blue", type="o", ylim=c(0.6,0.85))
+lines(ts(forecast_vals, start=2015, frequency=1), col="black", type="o")
+
+# Add confidence intervals
+lines(ts(lower_95, start=2015, frequency=1), col="red", lty=2)
+lines(ts(upper_95, start=2015, frequency=1), col="red", lty=2)
+legend("topleft", lty=c(1,2), col=c("black","red"),
+       legend=c("Forecast", "95% CI"))
+```
+
+#### Discussion
+*Comparison table*
+```{r}
+final_results_task3 <- data.frame(Model = c("Finite","Poly","Koyck","Autoregressive", "Dynamic"),
+                          AIC = c(AIC(finite_hmd), AIC(poly_rdn), AIC(koyck_hmd),AIC(ardl_hmd),AIC(dynlm_rdn)),
+                          BIC = c(BIC(finite_hmd), BIC(poly_rdn), BIC(koyck_hmd),BIC(ardl_hmd),BIC(dynlm_rdn)),
+                          MASE= c(MASE(finite_hmd)$MASE, MASE(poly_rdn)$MASE ,MASE(koyck_hmd)$MASE, MASE(ardl_hmd)$MASE, MASE(lm(dynlm_rdn))$MASE))
+
+final_results_task3 <- final_results_task3[order(final_results_task3$MASE), ]
+print(final_results_task3)
+```
+
+* The Finite Distributed Lag model provides the best balance between model fit, interpretability, and predictive performance, lowest MASE (0.45) and stable coefficients.
+* While the Dynamic model (radiation) explains more variance (R² = 0.68) and shows temporal persistence, its higher error makes it less practical for forecasting.
+
+### Task 3b
+#### Model fitting
+```{r}
+Y.t <- RBO
+S.t <- ifelse(seq(Y.t) >= 13 & seq(Y.t) <= 26,1,0) # 1996–2009 drought
+S.t.1 <- Lag(S.t, +1)
+
+#Model fitting
+# Model 1: Lag(1) + drought pulse + trend
+dyn1 <- dynlm(Y.t ~ L(Y.t,1) + S.t + trend(Y.t))
+# Model 2: Lag(2) + drought pulse + trend
+dyn2 <- dynlm(Y.t ~ L(Y.t,2) + S.t + trend(Y.t))
+# Model 3: Lag(1) + drought pulse
+dyn3 <-dynlm(Y.t ~ L(Y.t,1) +S.t)
+#Model 4: Lag(2) + immediate and lagged drought pulses
+dyn4 <- dynlm(Y.t~L(Y.t,1) +L(Y.t,2) + S.t+ S.t.1)
+#Model 5: Lag(2) + lagged drought pulses
+dyn5 <- dynlm(Y.t~L(Y.t,1) +L(Y.t,2) + S.t.1)
+#Model 6: Lag(3) + lagged drought pulse
+dyn6 <- dynlm(Y.t ~ L(Y.t, 1) + L(Y.t, 2) + L(Y.t, 3) + S.t.1)
+#Model 7: Lag(3) + immediate + lagged drought + trend
+dyn7 <- dynlm(Y.t ~ L(Y.t, 1) + L(Y.t, 2) + L(Y.t, 3) + S.t + S.t.1 + trend(Y.t))
+#Model 8: Lag(2) + temperature + drought + trend
+dyn8 <- dynlm(Y.t ~ tmp + L(Y.t, 1) + L(Y.t, 2) + S.t + S.t.1 + trend(Y.t))
+#Model 9: Lag(2) + rainfall + drought + trend
+dyn9 <- dynlm(Y.t ~ rnf + L(Y.t, 1) + L(Y.t, 2) + S.t + S.t.1 + trend(Y.t))
+#Model 10: Lag(2) + radiation + drought + trend
+dyn10 <- dynlm(Y.t ~ rdn + L(Y.t, 1) + L(Y.t, 2) + S.t + S.t.1 + trend(Y.t))
+#Model 11: Lag(2) + humidity + drought + trend
+dyn11 <- dynlm(Y.t ~ hmd + L(Y.t, 1) + L(Y.t, 2) + S.t + S.t.1 + trend(Y.t))
+```
+*Model comparison*
+```{r}
+results3 <- data.frame (Model = c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"),
+                       AIC = c(AIC(dyn1), AIC(dyn2), AIC(dyn3), AIC(dyn4), AIC(dyn5), AIC(dyn6), AIC(dyn7), AIC(dyn8), AIC(dyn9), AIC(dyn10), AIC(dyn11)),
+                       BIC = c(BIC(dyn1), BIC(dyn2), BIC(dyn3), BIC(dyn4), BIC(dyn5), BIC(dyn6), BIC(dyn7), BIC(dyn8), BIC(dyn9), BIC(dyn10), BIC(dyn11)),
+                       MASE = c(MASE(lm(dyn1))$MASE, MASE(lm(dyn2))$MASE, MASE(lm(dyn3))$MASE, MASE(lm(dyn4))$MASE, MASE(lm(dyn5))$MASE, MASE(lm(dyn6))$MASE, MASE(lm(dyn7))$MASE, MASE(lm(dyn8))$MASE, MASE(lm(dyn9))$MASE, MASE(lm(dyn10))$MASE, MASE(lm(dyn11))$MASE))
+
+dyn_results3 <- results3[order(results3$MASE), ]
+print(dyn_results3)
+```
+
+* AIC and BIC are the lowest among all models, indicating the best overall model fit and simplicity.
+* Although MASE (0.728) is slightly higher than Model 8, it’s only a minor difference, while the large gain in AIC/BIC strongly supports Model 1.
+
+*Model selection*
+```{r}
+summary(dyn1)
+```
+
+* The intercept (0.78, p < 0.001) represents the baseline RBO level under normal conditions. 
+* The lag term (L(Y.t, 1) = 0.017, p = 0.92) is not significant, showing limited short-term persistence. 
+* The drought variable (S.t = –0.0485, p = 0.002) has a strong negative effect, flowering orders became more dissimilar. The trend term (–0.00198, p = 0.016) also shows a significant long-term decline in RBO, suggesting increasing dissimilarity in flowering orders over time
+* Strong fit (R² ≈ 0.60) and significant overall F-test
+
+```{r}
+checkresiduals(dyn1)
+```
+
+* The residual plot (top) fluctuates randomly around zero, indicating no visible pattern
+* The ACF of residuals shows all autocorrelations within the confidence bounds, meaning there is no significant serial correlation
+* The histogram with normal curve shows residuals are approximately normally distributed, confirming that model errors behave like white noise.
+
+#### Forecasting
+*Model fitted with the original data*
+```{r}
+par(mfrow=c(1,1))
+plot(Y.t,ylab='RBO',xlab='Year',main = "Fit with original FFD", col="blue")
+lines(dyn1$fitted.values,col="red")
+legend("topleft", lty = 1,pch=1,text.width=11, col = c("blue","red"), c("Data","Dynamic Model 1"))
+```
+
+* The fitted model shows the right pattern in the period of drought 
+
+*Forecasting*
+```{r}
+# --- Forecast horizon ---
+q <- 3   # years ahead
+
+# --- Basic setup ---
+n <- nrow(dyn1$model)
+rbo.frc <- array(NA, n + q)
+rbo.frc[1:n] <- Y.t[1:n]
+
+# Coefficients
+b <- coef(dyn1)
+b0 <- b["(Intercept)"]; b1 <- b["L(Y.t, 1)"]
+bS <- b["S.t"]; bT <- b["trend(Y.t)"]
+
+# --- Trend setup ---
+trend.start <- dyn1$model[n, "trend(Y.t)"]
+trend <- seq(trend.start + 1, trend.start + q, 1)
+
+# --- Drought dummy for forecast period ---
+start_year <- start(Y.t)[1]; end_year <- end(Y.t)[1]
+future_years <- end_year + (1:q)
+S_future <- as.integer(future_years >= 1996 & future_years <= 2009)
+sigma_e <- summary(dyn1)$sigma
+
+# Forecast + CI storage
+forecast <- numeric(q)
+lower <- numeric(q)
+upper <- numeric(q)
+
+
+# --- Forecast loop ---
+for (i in 1:q) {
+  data.new <- c(1, rbo.frc[n + i - 1], S_future[i], trend[i])
+  y_hat <- as.vector(coef(dyn1)) %*% data.new
+  
+  # store forecast
+  forecast[i] <- y_hat
+  rbo.frc[n + i] <- y_hat
+  
+  # 95% CI (±1.96 * sigma)
+  lower[i] <- y_hat - 1.96 * sigma_e
+  upper[i] <- y_hat + 1.96 * sigma_e
+}
+
+forecast_df <- data.frame(
+  Year = future_years,
+  Lower_95 = lower,
+  Forecast = forecast,
+  Upper_95 = upper
+)
+print(forecast_df)
+
+```
+*Plot*
+```{r}
+plot(Y.t, xlim = c(start_year, end_year + q),
+     ylab = 'RBO', xlab = 'Year',
+     main = paste0('RBO with 3-year ahead forecast (95% CI)'),
+     col = 'black', type = 'o')
+
+# Forecast line
+lines(ts(forecast, start = c(end_year + 1)), col = 'red', type = 'o')
+
+# Confidence intervals as shaded region
+polygon(x = c(future_years, rev(future_years)),
+        y = c(lower, rev(upper)),
+        col = rgb(1, 0, 0, 0.2), border = NA)
+
+legend("bottomleft",
+       legend = c("Data", "Forecast", "95% CI"),
+       col = c("black", "red", rgb(1,0,0,0.2)),
+       lty = c(1,1,NA), pch = c(1,1,15),
+       pt.cex = 2, bty = "n")
+```
+
+# Conclusion
+This report evaluated the influence of climate and environmental factors across three separate forecasting contexts using multiple time-series modelling approaches. Across all tasks, model selection was guided by AIC, BIC, R², and MASE, ensuring the final forecasts balanced both statistical fit and interpretability.
+
+* Task 1: Multivariate specifications exploiting both climate and emissions deliver the strongest weekly forecasts. Among families, the selected top models balance low AIC/BIC with MASE gains, showing that adding carefully chosen lags of temperature/air-pollution improves 4-week-ahead mortality predictions without overfitting. Although the dataset was recorded weekly, the Holt–Winters exponential smoothing model was applied to a monthly-aggregated series to stabilise short-term volatility and capture broader seasonal cycles. The model produced a 4-week-ahead forecast of approximately 97.5 cases (95% CI: 88.8–106.2), effectively representing one month ahead.
+
+* Task 2: The finite DLM with rainfall is the most accurate forecaster (lowest MASE ≈ 0.39 with supportive AIC/BIC), and its lag coefficients indicate biologically consistent effects (some lags delaying flowering, others advancing it). Smoothing/ETS models (ANN/MNN) were competitive on parsimony but did not beat the DLM on error accuracy for 4-year-ahead forecasts.
+
+* Task 3: 
+  
+  * Part (a): Among univariate regressors, the best models are those that capture short memory in RBO and targeted climate lags. Finite DLM with humidity ranked best overall by MASE, while ARDL and dynamic variants with radiation/humidity were close on AIC/BIC with well-behaved residuals.
+  
+  * Part (b): Introducing a drought intervention (1996–2009) with trend in a dynamic model materially improves fit. The drought dummy is strongly negative, and the downward trend is significant—showing that flowering orders became increasingly dissimilar from 1983 during and beyond the drought. Residual checks (e.g., Breusch–Godfrey/Ljung–Box) confirm no remaining serial correlation, supporting forecast validity.
+  
+# References
+Demirhan, H. (2021). *dLagM package: Distributed Lag Models in R (Version 1.1.13) [Software documentation]*. R Documentation. https://www.rdocumentation.org/packages/dLagM/versions/1.1.13/topics/forecast
+
+Hudson, I. (2025). MATH1307: *Forecasting [Lecture slides and lab solutions]*. RMIT University, School of Science, Mathematical Sciences.
+
+Hudson, I. (2025). MATH1307: *Time Series Analysis [Lecture notes]*. RMIT University, School of Science, Mathematical Sciences.
+
+Hyndman, R. J., & Athanasopoulos, G. (2018). *Forecasting: Principles and Practice (2nd ed.)* [Online textbook]. OTexts. https://otexts.com/fpp2/regression-intro.html
+
