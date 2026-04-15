@@ -1,0 +1,292 @@
+---
+title: "MATH1307 Assignment 1"
+subtitile: ''
+date: "2025-08-18"
+output:
+  html_notebook: default
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+## Student Details
+
+
+Thuy Tien Luong (s4159259)
+
+
+## Introduction
+
+This report investigates the relationship between the ASX All Ordinaries (ASX) Price Index and selected economic variables (Gold, Oil, and Copper) using time series analysis. The primary objective is to examine the time series objects and identify a suitable distributed lag model for ASX index.
+
+The analysis involves four main steps: preparing and cleaning the dataset, assessing stationarity and transforming non-stationary variables, fitting different distributed lag models, and selecting the most appropriate model based on goodness-of-fit, residual diagnostics, and multicollinearity. By systematically comparing finite distributed lag, polynomial distributed lag, Koyck, and autoregressive distributed lag models, the report aims to provide a reliable framework for understanding and analysing the variables.
+
+## Load Packages
+```{r, message=FALSE}
+# Loading necessary packages
+library(tseries)
+library(urca)
+library(forecast)
+library(TSA)
+library(x12)
+library(car)
+library(dLagM)
+```
+
+## Data Preparation
+- This step aims to gain an understanding of the dataset and its characteristics. It involves examining the data structure, performing the necessary cleaning, and converting variables into appropriate data types, thereby ensuring that the dataset is properly prepared for the subsequent stages of analysis.
+- Initially, the Copper and Gold price variables were stored as character types. These were converted to numeric values. After this conversion, all variables were successfully formatted as time series.   
+```{r, message=FALSE}
+#Read the data
+setwd("C:/Users/tally/OneDrive/Desktop/Forecasting")
+data <- read.csv("ASX_data.csv")
+```
+```{r}
+# Assess the dataset
+head(data)
+str(data)
+
+# Convert to numeric values
+data$Copper_USD.tonne <- as.numeric(gsub(",", "", data$Copper_USD.tonne))
+data$Gold.price <- as.numeric(gsub(",", "", data$Gold.price))
+str(data)
+
+# Convert to time series object
+ASX_ts <-ts(data$ASX.price, start = c(2004,1), frequency = 12)
+Gold_ts <-ts(data$Gold.price, start = c(2004,1), frequency = 12)
+Oil_ts <-ts(data$Crude.Oil..Brent._USD.bbl, start = c(2004,1), frequency=12)
+Copper_ts <-ts(data$Copper_USD.tonne, start = c(2004,1), frequency = 12)
+data_ts <- ts(data,start = c(2004,1), frequency = 12)
+```
+## Nonstationary analysis
+- A non-stationary time series is one whose statistical properties, such as mean and variance, change over time (Chand, 2023). Non-stationarity is a critical issue because it can lead to misleading regression results due to spurious correlations. To assess stationarity, two approaches were used: visual inspection and formal unit root tests.
+- The first approach involves visual inspection of the time series plots and their autocorrelation functions (ACF). These visual tools help identify potential trends and persistence in the data, providing an intuitive understanding of how each series evolves over time.
+- The second approach uses the Augmented Dickey-Fuller (ADF) and Phillips-Perron (PP) unit root tests, which are standard statistical procedures for formally testing the presence of a unit root and confirming non-stationarity. Combining these two methods allows for a thorough assessment of the data.
+
+```{r}
+# Function for plots
+plot_series <- function(ts_data, name) {
+  plot(ts_data, main=paste(name, "Time Series"), ylab="Value", xlab="Time", type="o") #time series plot
+  text(time(ts_data), ts_data, 
+     labels = substring(month.abb[cycle(ts_data)], 1, 1), 
+     pos = 3, cex = 0.7, col = rainbow(12)[cycle(ts_data)]) #showing seasonal patterns
+  par(mfrow=c(2,2))
+  acf(ts_data, main=paste("ACF:", name),cex.main=0.65) #ACF plot
+  pacf(ts_data, main=paste("PACF:", name),cex.main=0.5) #PACF plot
+  par(mfrow=c(1,1))
+}
+
+# Function for unit root test
+unit_root_test <- function(ts_data,name) {
+  adf_result <- ur.df(ts_data, type = "none", lags = 1, selectlags = "AIC") #ADF test
+  print(summary(adf_result))
+  pp_result <- ur.pp(ts_data, type = "Z-tau", lags = "short") #PP test
+  print(summary(pp_result))
+}
+
+```
+
+#### ASX variable
+The ASX series shows a clear upward trend, indicating non-stationarity in the mean. The ACF exhibits a slow decay, and the PACF shows a high first autocorrelation. Formal testing using the ADF and PP tests confirms this observation: both test statistics exceed their respective critical values, indicating that the null hypothesis of a unit root is not rejected.
+
+=> **Nonstationary**
+```{r}
+# Running functions for ASX variable
+plot_series(ASX_ts, "ASX")
+unit_root_test(ASX_ts, "ASX")
+```
+#### Gold variable
+Gold prices display an upward trend from 2006 to 2012. The ACF decays slowly, and the PACF shows high initial autocorrelation. Formal testing supports this conclusion: the ADF test statistic is more negative than the critical value, and the PP test statistic exceeds the 5% critical value. Both tests fail to reject the null hypothesis of a unit root.
+
+=> **Nonstationary**
+```{r}
+# Running functions for Gold variable
+plot_series(Gold_ts, "Gold")
+Gold_result <- unit_root_test(Gold_ts, "Gold")
+```
+
+#### Oil variable
+The Oil series shows a pronounced upward trend with increasing variance over time. Its ACF and PACF patterns indicate non-stationarity. Both the ADF and PP tests corroborate the visual evidence: the ADF test statistic is greater than the 5% critical value, and the PP test yields a similar result. Consequently, the null hypothesis of a unit root is not rejected.
+
+=> **Nonstationary**
+```{r}
+# Running functions for Oil variable
+plot_series(Oil_ts, "Oil")
+Oil_result <- unit_root_test(Oil_ts, "Oil")
+```
+
+#### Copper variable
+Finally, Copper prices exhibit a strong upward trend. The ACF shows a slow decay, and the PACF has a high first autocorrelation. The ADF test returns a statistic of -0.3909, which is greater than all critical values, and the PP test statistic also exceeds its critical value. Therefore, both tests fail to reject the null hypothesis.
+
+=> **Nonstationary**
+```{r}
+# Running functions for Copper variable
+plot_series(Copper_ts, "Copper")
+Copper_result <- unit_root_test(Copper_ts, "Copper")
+```
+
+## Exploration of components of the time series data
+
+#### Stationarity
+- All four variables were found to be non-stationary. To address this:
+  - At first, The Box-Cox transformation was applied to identify variables requiring transformation. Oil was the only variable transformed (λ < 1). 
+  - First-order differencing was then applied to all variables. After differencing, all series passed the ADF test, confirming stationarity.
+```{r}
+#Calculating lambda function
+get_lambda <- function(ts_name, name) {
+  lambda = BoxCox.lambda(ts_name)
+  cat("lambda of",name, lambda, "\n")
+}
+
+#get lambda
+get_lambda(ASX_ts, "ASX")
+get_lambda(Gold_ts, "Gold")
+get_lambda(Oil_ts, "Oil")
+get_lambda(Copper_ts, "Copper")
+
+#Difference variables
+get_diff_adf <- function(ts_name, name) {
+    ts_name <- diff(ts_name)       # difference
+    cat("ADF test for", name)
+    print(adf.test(ts_name))               # run ADF test
+}
+
+# Running function
+get_diff_adf(ASX_ts, "ASX")
+get_diff_adf(Gold_ts, "Gold")
+get_diff_adf(log(Oil_ts), "Oil")
+get_diff_adf(Copper_ts, "Copper")
+```
+
+#### Components of time series data
+```{r}
+#Decomposition to analyse components of time series
+decomp.x12 <- function(ts_name,name) {
+  decompose_name <- x12(ts_name)
+  plot(decompose_name,main=paste("Time series: ", name), sa=TRUE, trend=TRUE)
+}
+
+decomp.x12(ASX_ts, "ASX")
+decomp.x12(Gold_ts, "Gold")
+decomp.x12(Oil_ts, "Oil")
+decomp.x12(Copper_ts, "Copper")
+
+```
+
+#### Assessment
+- According to (Hyndman & Athanasopoulos, 2018), a time series can be decomposed into three main components: trend, seasonal, and cyclical. Among these, trend and seasonal patterns require careful identification and analysis.
+- The plots indicate that the trend is the most dominant component across all four datasets. It is the primary driver of non-stationarity, meaning that the statistical properties of the series, such as the mean and variance, change over time. The persistent upward movement largely explains the overall increase in prices and highlights why simple statistical models would struggle to produce accurate forecasts without first addressing the trend.
+- The seasonal component reflects regular fluctuations associated with calendar-based factors, such as months, quarters, or days of the week. However, both the raw time series plots and the decomposition results suggest that seasonality is absent in these datasets. Therefore, no seasonal adjustments are necessary in the analysis.
+- Finally, the cyclical component represents long-term fluctuations that are not tied to a fixed period. In the ASX, Oil, and Copper series, cyclical patterns are evident, producing multi-year variations that significantly influence the behavior of the variables over time. These long-term cycles should be considered when analyzing the series.
+
+## Decision on distributed lag model for the ASX price index
+```{r}
+# Correlation matrix
+cor(data_ts)
+```
+- Copper and Oil are highly correlated, which could cause multicollinearity. Among the independent variables, Copper shows the highest correlation (0.56) with ASX. Therefore, Copper was chosen as the explanatory variable for subsequent modeling.
+
+#### FINITE DLM
+- The first model fitted was a finite distributed lag model, where the number of lags is pre-specified. A loop was conducted to identify the lag length that minimizes the AIC and BIC. The results indicated that a lag of 12 (q = 12) was optimal.
+```{r}
+# loop for identifying number of lag for model 
+for (i in 1:12) {
+  model1.1 = dlm(x=as.vector(data$Copper_USD.tonne),y=as.vector(data$ASX.price), q = i )
+  cat ("q=", i, "AIC=", AIC(model1.1$model), "BIC=", BIC(model1.1$model), "\n") # printing AIC and BIC
+}
+
+```
+- This model explains only a small portion of the variation in the ASX index, as indicated by low R-squared and adjusted R-squared values. The residual error is relatively large, and although most lag coefficients are statistically significant, the model suffers from overfitting and weak explanatory power.
+
+```{r}
+model1<-dlm(x=as.vector(data$Copper_USD.tonne),y=as.vector(data$ASX.price), q = 12) #apply model
+summary(model1)
+
+```
+- The residual diagnostics show significant autocorrelation and non-normality.
+```{r}
+checkresiduals(model1$model)
+```
+- Multicollinearity is also a major concern, with very high VIF values. Overall, this model is inadequate and unreliable for predictive purposes.
+```{r}
+VIF.model1 <- vif(model1$model)
+VIF.model1 >10
+```
+
+#### POLYNOMIAL DLM
+- Despite this improvement, the residuals are still not randomly scattered around zero, and the ACF indicates high autocorrelation. Residuals are also not normally distributed, which can affect the reliability of statistical inferences.
+```{r}
+model2 <- polyDlm(x=as.vector(data$Copper_USD.tonne), y=as.vector(data$ASX.price), q=12, k=2, show.beta = TRUE) #apply model
+summary(model2)
+checkresiduals(model2$model)
+
+#sorting AIC of existence models
+aic.sort <- AIC(model1$model, model2$model)
+sortScore(aic.sort,"aic")
+```
+- The model has a lower AIC compared to the previous model, but multicollinearity remains a problem, as predictors are highly correlated.
+```{r}
+VIF.model2 <- vif(model2$model)
+VIF.model2 >10
+```
+
+#### KOYCK Model
+- The Koyck model provides a strong overall fit, explaining 94.85% of the variance in the dependent variable with a residual error of 202.9. The model is statistically significant overall (Wald test p < 2.2e-16).
+- Residual diagnostics indicate no significant autocorrelation (Ljung-Box p = 0.7953), and residuals are mostly centered around zero with no obvious trend, although some spikes and fat tails are observed.
+- The model’s geometric lag coefficient is small, suggesting a strong dynamic dependence of the ASX index on its past values, while the immediate effect of the independent variable is limited.
+```{r}
+model3 <- koyckDlm(x=as.vector(data$Copper_USD.tonne), y=as.vector(data$ASX.price)) #apply model
+summary(model3)
+checkresiduals(model3$model)
+```
+- Importantly, the model does not show evidence of harmful multicollinearity, and parameter estimates are stable and reliable.
+```{r}
+VIF.model3 <- vif(model3$model)
+VIF.model3 > 10
+```
+
+#### Autoregressive DLM
+- An autoregressive distributed lag model was estimated using a loop to determine the optimal lag length based on AIC and BIC. The best model was identified with p = 5 and q = 1.
+```{r}
+# Loop for identifying lag of dependent and independent variable
+for (i in 1:5){
+  for(j in 1:5){
+    model4.1 = ardlDlm(x=as.vector(data$Copper_USD.tonne), y=as.vector(data$ASX.price), p = i , q = j )
+    cat("p = ", i, "q = ", j, "AIC = ", AIC(model4.1$model), "BIC = ", BIC(model4.1$model),"\n")
+  }
+}
+```
+- This model explains about 95% of the variance in the dependent variable, indicating an excellent fit. Both the intercept and the contemporaneous value of the independent variable are statistically significant at the 5% level. 
+- Residual diagnostics show a standard error of 193.4, and the Breusch–Godfrey test (p = 0.93) confirms the absence of serial correlation, indicating well-behaved residuals.
+- This model has lower AIC (2095.1) compared to the FDL (2405.2) and PDL (2385.6) models, demonstrating better efficiency and parsimony despite including multiple lags.
+```{r}
+model4_51 <-ardlDlm(x=as.vector(data$Copper_USD.tonne), y=as.vector(data$ASX.price), p=5, q=1) #apply model
+summary(model4_51)
+checkresiduals(model4_51$model)
+
+# sorting model
+aic.sort <- AIC(model1$model, model2$model, model4_51$model)
+sortScore(aic.sort,"aic")
+```
+
+- However, the model shows signs of multicollinearity, which could affect the stability of some coefficient estimates.
+```{r}
+VIF.model4_51 <- vif(model4_51$model)
+VIF.model4_51 > 10
+```
+
+#### Discussion
+- Comparing all models, the Koyck and ARDL models perform best, explaining over 94% of ASX variation and showing low residual errors.
+  - Koyck Model: Simple, dynamic, and reliable, with minimal multicollinearity. Captures the ASX’s dependence on past values but shows limited immediate effect from predictors.
+  - RDL Model: Explains slightly more variance and allows flexible lag structures, but multicollinearity may affect coefficient stability.
+- Considering simplicity, reliability, and dynamic representation, the Koyck model is the most suitable. It balances strong explanatory power, parsimony, and stability, making it the preferred choice for modeling the ASX index.
+
+## Conclusion
+This report analyzed the ASX All Ordinaries (ASX) Price Index using time series methods to identify a reliable model for forecasting. The dataset was first cleaned and transformed into appropriate time series objects. Non-stationarity was assessed through visual inspection and formal unit root tests (ADF and PP), and first-order differencing was applied to all variables to achieve stationarity. Trend was identified as the dominant component, while seasonality was absent. Correlation analysis led to the selection of Copper as the key explanatory variable.
+
+Four models were compared: finite distributed lag (FDL), polynomial distributed lag (PDL), Koyck, and autoregressive distributed lag (ARDL). The Koyck model is preferred due to its simplicity, stability, and minimal multicollinearity, while the ARDL model offers flexibility but may be affected by correlated predictors. Overall, the Koyck is the most suitable distributed lag model.
+## References
+Chand, P. (2023, May 9). *Stationary V. Non-Stationary Time Series*. Medium. https://medium.com/@prateekchand208/stationary-v-non-stationary-time-series-41dfa4514a8
+
+Hyndman, R. J., & Athanasopoulos, G. (2018). *Forecasting : Principles and Practice* (2nd ed.). Otexts. https://otexts.com/fpp2/
+
