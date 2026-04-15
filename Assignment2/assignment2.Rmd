@@ -1,0 +1,420 @@
+---
+title: "Assignment 2"
+author: "Thuy Tien Luong (s4159259)"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+# Introduction
+* Task 1 section details the methodology and results for forecasting monthly average horizontal solar radiation two years ahead (January 2015 to December 2016). The analysis utilized the solar radiation series itself alongside monthly precipitation as an exogenous variable over the period spanning January 1960 to December 2014. To ensure the robustness and accuracy of the forecast, four distinct classes of time series models were evaluated: time series regression, dynamic linear models, and exponential smoothing models and corresponding state-space models. The goal was to identify the model producing the lowest Mean Absolute Scaled Error (MASE), providing the best 24-month forecast.
+* Task 2 investigates the relationship between two critical economic indicators in Victoria: the quarterly Residential Property Price Index (PPI) in Melbourne and the quarterly population change (transformed logarithmically) between September 2003 and December 2016. The primary objective of this report is to determine if this high correlation is genuine or if it is spurious, resulting purely from shared non-stationary trends and seasonality within the data, and, consequently, to identify the true short-run relationship between their growth rates.
+
+#Task 1: Analysis and forecasting
+```{r packages}
+#loading packages
+library(dLagM)      
+library(dynlm)      
+library(forecast)   
+library(ggplot2)    
+library(tseries)    
+library(TSA)
+library(Hmisc)
+library(xts)
+library(AER)
+library(urca)
+library(tseries)
+library(dynlm)
+```
+
+## Data Description
+* The raw historical and future precipitation data were imported and validated, with the columns being renamed for clarity. All variables were then converted into R time series objects (ts), correctly defined as monthly data with a frequency of 12, beginning in January 1960, to ensure proper handling of seasonality during model estimation.
+```{r preparation}
+#read data
+setwd("C:/Users/tally/OneDrive/Desktop/Forecasting/Assignment2")
+solar_data <- read.csv("data1.csv")
+#check data
+head(solar_data)
+#rename column
+colnames(solar_data)<-c("solar", "precipitation")
+future_precip <- read.csv("data.x.csv")
+head(future_precip)
+
+#Time series object
+solar_ts <- ts(solar_data$solar, start = c(1960, 1), frequency = 12)
+precip_ts <- ts(solar_data$precipitation, start = c(1960, 1), frequency = 12)
+data_ts <- ts(solar_data, start = c(1960, 1), frequency = 12)
+future_precip_ts <- ts(future_precip, start = c(2015, 1), frequency = 12)
+```
+
+## Data Exploration 
+```{r exploration}
+plots <- function(x) { #function to explore time series objects: time series plot, ACF plot, ADF test and PP test
+  plot(x, xlab='Year', main="Time series")
+  points(y=x,x=time(x), pch=as.vector(season(x)))
+  acf(x, main="Sample ACF plot", lag.max = 48) #ACF plot
+  adf_result <- ur.df(x, type = "none", lags = 1, selectlags = "AIC") #ADF test
+  print(summary(adf_result))
+  pp_result <- ur.pp(x, type = "Z-tau", lags = "short") #PP test
+  print(summary(pp_result))
+}
+```
+
+* The data exhibits strong, consistent annual seasonality, peaking around July and reaching troughs around December. The magnitude of these fluctuations appears to vary over time.
+* Both ADF and PP tests (test statistic is less tan all critical values) indicate that the series is stationary (the null hypothesis of a unit root is rejected) which means the mean and variance of the series are stable over time, and no regular differencing is required for modeling
+
+```{r, fig.width=15, fig.height=6, echo = FALSE}
+plots(solar_ts) #explore solar radiation
+```
+* The time series plot shows there is a slight increasing trend in its average level and volatility. The series describes strong seasonality, a consistent pattern of peaks and troughs appears to repeat within each year. 
+* The ACF plot with the strongest positive correlations are clearly visible around the 1-year, 2-year, 3-year, and 4-year marks, confirming a strong annual seasonality
+* The ADF and PP test shows the same result as solar object when both of them have the test statistic is smaller than the critical value. Therefore, the test indicates the series is stationary. 
+* To conclude, the time series is stationary but exhibits a strong annual seasonal pattern and high short-term persistence
+
+```{r, fig.width=15, fig.height=6, echo = FALSE}
+plots(precip_ts) #explore precipitation
+```
+* Before fitting the model, examination the relationship between two objects will bring a helpful vision of the correlation between the explanatory variable and dependent variable
+* Across the entire time horizon, there is a clear inverse seasonal correlation between two variables. Periods of high solar radiation generally coincide with periods of low precipitation, and vice-versa.
+* The correlation coefficient show a negative value as -0.45, showing a moderate relationship between these variables.
+```{r correlation}
+data.scaled <- scale(data_ts) # scale data to the same measure
+plot(data.scaled, plot.type="s", col=c("red", "lightblue"), main = "solar radiation and precipitation")
+legend("topleft", lty=1, text.width = 11, col = c("red", "lightblue"), c("solar radiation", "precipitation"))
+
+cor(data_ts) #correlation coefficient
+```
+
+## Fitting Models
+
+### Time Series Regression Methods
+#### Finite DLM
+- The loop shows that the lowest MASE belong to lag 12, then we will execute finite DLM with lag 12
+```{r}
+summarise <- function(x) { #function to summarise models
+  summary(x)
+  checkresiduals(x$model)
+  VIF <- vif(x$model)
+  VIF >10
+}
+# loop for identifying number of lag for model 
+for (i in 1:12) {
+  model1.1 <- dlm(x = as.vector(solar_data$precipitation),
+                  y = as.vector(solar_data$solar),
+                  q = i)
+  cat("q =", i,
+      "AIC =", AIC(model1.1$model),
+      "BIC =", BIC(model1.1$model),
+      "MASE =", MASE(model1.1)$MASE,
+      "\n")
+}
+```
+* The model provides a poor overall fit with an Adjusted R squared of only 0.3077. While the model is statistically significant and free from severe multicollinearity (VIF < 10 for all terms), only the current and 12-month lagged Precipitation coefficients are significant. Crucially, the model is invalid for forecasting because its residuals exhibit strong, unmodeled autocorrelation at the non-seasonal (Lag 1) and seasonal (Lag 12) periods , indicating that the internal time-dependencies of the Solar Radiation series have not been captured.
+- Therefore, the next model will be examined to find the best fit.
+``` {r}
+model1<-dlm(x = as.vector(solar_data$precipitation),
+                  y = as.vector(solar_data$solar), q = 12) #apply model
+summarise(model1)
+
+```
+
+#### Polynomial DLM
+* The Polynomial DLM was tested to improve model parsimony. By assuming the lag coefficients follow a quadratic polynomial (k=2), both Model 2 (q=12) and Model 2.1 (q=11) achieved nearly the same level of explainability (Adjusted R squared approx. 0.31) as the full DLM but used far fewer parameters, confirming the efficiency of the polynomial assumption. Model 2 (q=12) was marginally the best of the two. However, the PDLM structure is still fundamentally flawed because it fails the residual checks: the errors remain highly autocorrelated at Lags 1 and 12 . Since the model errors are not white noise, the PDLMs are not valid for generating reliable forecasts. The next step is required to address this residual seasonality.
+``` {r}
+model2 <- polyDlm(x = as.vector(solar_data$precipitation),
+                  y = as.vector(solar_data$solar), q=12, k=2, show.beta = TRUE)
+summarise(model2)
+
+model2.1 <- polyDlm(x = as.vector(solar_data$precipitation),
+                  y = as.vector(solar_data$solar), q=11, k=2, show.beta = TRUE)
+summarise(model2.1)
+```    
+
+#### Koyck transformation
+* The Koyck DLM represents a significant advancement over the previous models, achieving a high Adjusted R squared of 0.7591 while dramatically reducing the residual standard error to 4.814. This is due to the inherent structure of the Koyck model, which uses the lagged dependent variable to efficiently capture the long-term effects and high persistence within the solar radiation series. Both the concurrent Precipitation and the lagged Solar Radiation coefficients are highly significant. However, the model is still invalid for forecasting because the Ljung-Box test strongly rejects the white noise assumption, confirmed by the remaining autocorrelation spikes in the residual ACF plot, particularly the unmodeled seasonal component at Lag 12. 
+``` {r}
+model3 <- koyckDlm(x = as.vector(solar_data$precipitation),
+                  y = as.vector(solar_data$solar))
+summarise(model3)
+```
+
+#### Autoregressive DLM
+* A loop was run to see which autoregressive dlm model have lowest AIC, BIC and MASE. Comparing among models, there are three models selected including ARDL(2,5), ARDL(4,5), ARDL(5,5)
+* The Autoregressive Distributed Lag (ARDL) model represents the definitive refinement of the time series regression approach. By systematically testing the model orders, ARDL(4,5) and ARDL(5,5) demonstrated superior performance. Both models achieved an outstanding Adjusted R squared of over 0.93, meaning more than 93% of the variance in Solar Radiation is now explained. Most importantly, the ARDL structure successfully addressed all previous residual issues, resulting in white noise errors , validating the model for forecasting. The ARDL(5,5) yielded the lowest MASE score of 0.44793, making it the best time series regression model tested. The model shows the Solar Radiation series' own historical values (Yt-1, Yt-3, Yt-4, Yt-5) are the primary drivers, with Precipitation having a weak, delayed influence at a four-month lag (Xt-4). 
+``` {r}
+for (i in 1:5){ # loop to identify the lag with the best AIC, BIC and MASE
+  for(j in 5){
+    model4.1 = ardlDlm(x = as.vector(solar_data$precipitation),
+                  y = as.vector(solar_data$solar), p = i , q = j)
+    cat("p =", i, "q =", j, "AIC =", AIC(model4.1$model), "BIC =", BIC(model4.1$model), "MASE =", MASE(model4.1)$MASE, "\n")
+  }
+}
+
+model4.25 <-ardlDlm(x = as.vector(solar_data$precipitation), y = as.vector(solar_data$solar), p=2, q=5) #apply model
+summarise(model4.25)
+
+model4.45 <-ardlDlm(x = as.vector(solar_data$precipitation),y = as.vector(solar_data$solar), p=4, q=5)
+summarise(model4.45)
+
+model4.55 <-ardlDlm(x = as.vector(solar_data$precipitation),y = as.vector(solar_data$solar), p=5, q=5)
+summarise(model4.55)
+```
+* The evaluation of all Distributed Lag Model (DLM) variants confirmed that only the Autoregressive Distributed Lag (ARDL) models provided a valid, accurate fit with white noise residuals. The simpler Finite, Polynomial, and Koyck DLMs were rejected due to their inability to model the strong autocorrelation and seasonality present in the Solar Radiation series, resulting in poor MASE scores (ranging from 1.03 to 1.57). The ARDL (p=5, q=5) model delivered the best forecast performance among all regression methods, achieving the lowest Mean Absolute Scaled Error (MASE = 0.4479311). This model is now the leading candidate from the time series regression group.
+``` {r}
+# List of models
+attr(model3$model,"class") = "lm"
+MASE(model3)$MASE
+model_results <- data.frame( #compartive board
+  Model = c("Finite DLM", "Polynomial DLM (q=11, k=2)", "Polynomial DLM (q=12, k=2)", "Koyck", "ADLM (p=2, q=5)", "ADLM (p=4, q=5)", "ADLM (p=5, q=5)"),
+  AIC = c(AIC(model1$model), AIC(model2.1$model), AIC(model2$model), AIC(model3$model), AIC(model4.25$model), AIC(model4.45$model), AIC(model4.55$model)),
+  BIC = c(BIC(model1$model), BIC(model2.1$model), BIC(model2$model), BIC(model3$model), BIC(model4.25$model), BIC(model4.45$model), BIC(model4.55$model)),
+  MASE = c(MASE(model1)$MASE, MASE(model2.1)$MASE, MASE(model2)$MASE, MASE(model3)$MASE, MASE(model4.25)$MASE, MASE(model4.45)$MASE, MASE(model4.55)$MASE)
+)
+reg_results <- model_results[order(model_results$MASE), ]
+# Display the table
+print(reg_results)
+
+```
+### Dynamic Models
+* The two Dynamic Linear Models tested were based on the high-performing ARDL(5,5) structure, enhanced by explicit seasonal dummy variables.
+  * Model 1: ARDL + Seasonality
+  * Model 2: ARDL + Trend + Seasonality
+``` {r}
+Y.t = solar_ts
+X.t = precip_ts
+dyn1 <- dynlm(Y.t ~ L(Y.t, k=1:5) + 
+                             L(X.t, k=0:5) + 
+                             season(Y.t))
+
+dyn2 <- dynlm(Y.t ~ L(Y.t, k=1:5) + 
+                             L(X.t, k=0:5) + 
+                             trend(Y.t) + 
+                             season(Y.t))
+```
+
+* This model is highly successful at fitting the data (Adjusted R squared > 0.95) by correctly identifying the importance of the series internal memory and the strong seasonal cycle. However, its major weakness is that it fails the Breusch-Godfrey test for white noise residuals, meaning it cannot be reliably used for forecasting. The Precipitation offers no unique, significant explanatory power.
+``` {r}
+summary(dyn1)
+checkresiduals(dyn1)
+
+plot(solar_ts, 
+  ylab='Mortality Level', 
+  xlab='Year', 
+  main = "Figure 18.2: Fitted Monthly Mortality Level (Koyck Model)",
+  col = "black",
+  lwd = 1)
+lines(dyn1$fitted.values, col="blue", lwd=1)
+```
+* This model performed no better than dyn1 in terms of fit or residual validity, as confirmed by the nearly identical Adjusted R squared and the failed Breusch-Godfrey test. Since the added trend term was highly insignificant, Model 2 is unnecessarily complex and less parsimonious than Model 1. 
+``` {r}
+summary(dyn2)
+checkresiduals(dyn2)
+```
+* The comprehensive evaluation of all time series regression models leads to the selection of the ARDL (p=5, q=5) model as the best overall candidate from this methodology group.While the Dynamic Linear Model 1 (DLM 1) achieved a superior model fit, evidenced by the lowest AIC (2861.98) and highest Adjusted R squared (0.9538), both DLM models were statistically invalid due to a failed Breusch-Godfrey test, meaning significant autocorrelation remains in the residuals.
+* In contrast, the ARDL (p=5, q=5) model achieved the lowest Mean Absolute Scaled Error (MASE = 0.44793), demonstrating the best forecast accuracy among all valid models. Crucially, its residuals were confirmed to be white noise, making it a reliable and valid model for inference.
+* The final best model from the regression analysis is the ADLM (p=5, q=5)
+``` {r}
+dnm_results <- data.frame( #comparative board for Dynamic Models
+  Model = c("Dynamic Linear 1", "Dynamic Linear 2"),
+  AIC = c(AIC(dyn1), AIC(dyn2)),
+  BIC = c(BIC(dyn1), BIC(dyn2)),
+  MASE = c(NA, NA))
+compared_board <- rbind(reg_results, dnm_results) #combine regression models + dynamic models
+compared_board <- compared_board[order(compared_board$MASE), ]
+compared_board
+```
+
+### Exponential smoothing
+* The Holt-Winters models revealed a dramatic improvement in forecast accuracy compared to all preceding Time Series Regression methods. All four HW models achieved a MASE score significantly lower than the best ARDL model
+  * The solar radiation series is highly stable and seasonal, making the Exponential Smoothing approach far superior to regression-based models
+  * The Multiplicative seasonality variants were superior to the Additive variants, confirming that the magnitude of the seasonal cycle grows proportionally with the level of series
+  * The two best models are the HW Multiplicative Damped and the HW Multiplicative, which will be looked into
+``` {r}
+fit1.add <- hw(solar_ts, seasonal = "additive")
+fit2.add.damp <- hw(solar_ts, seasonal = "additive", damped = TRUE)
+fit3.mul <- hw(solar_ts, seasonal = "multiplicative")
+fit4.mul.damp <- hw(solar_ts, seasonal = "multiplicative", damped = TRUE)
+
+hw_results <- data.frame( #comparative board for exponential smoothing
+  Model = c("HW Additive", "HW Additive Damped", "HW Multiplicative", "HW Multiplicative Damped"),
+  AIC = c(fit1.add$model$aic, fit2.add.damp$model$aic, fit3.mul$model$aic, fit4.mul.damp$model$aic),
+  BIC = c(fit1.add$model$bic, fit2.add.damp$model$bic, fit3.mul$model$bic, fit4.mul.damp$model$bic),
+  MASE = c(accuracy(fit1.add)[,"MASE"][1], accuracy(fit2.add.damp)[,"MASE"][1],
+           accuracy(fit3.mul)[,"MASE"][1], accuracy(fit4.mul.damp)[,"MASE"][1]))
+compared_board <- rbind(compared_board, hw_results)
+compared_board <- compared_board[order(compared_board$MASE), ]
+compared_board
+```
+* This model is an extremely accurate descriptive model (MASE 0.223) that correctly identifies multiplicative seasonality and a neligible trend. 
+* However, it is statistically invalid for forecasting because it fails the Ljung-Box test. The remaining autocorrelation indicates that the model is mis-specified and its prediction intervals will be unreliable
+``` {r}
+summary(fit3.mul)
+checkresiduals(fit3.mul)
+```
+* This is a potential model, it is an optimal forecasting tool for the Solar Radiation series. Achieving the lowest MASE score of 0.2356, it demonstrates superior accurary compared to all other models tested. 
+* Crucially, the model is also statistically valid: the Ljung-Box test resulted in a high p-value, and the residual plots show no significant autocorrelation (white noise). This validity means the model has captured all systematic patterns (a highly stable, proportional seasonal cycle and a neligible trend), ensuring its forecasts are reliable for future predictions.
+``` {r}
+summary(fit4.mul.damp)
+checkresiduals(fit4.mul.damp)
+```
+
+
+### State-space models
+* The analysis proceeded with a comprehensive evaluation of the State-Space (ETS) model family, which mathematically generalizes the Holt-Winters exponential smoothing technique. This approach systematically tests different combinations of Error type, Trend type, and Seasonal type to identify the structure that best fits the data
+* From above Holt-Winters' models, we have 8 state-space models. A loop was created to compare the AIC, BIC and MASE of each model.
+* Within the ETS framework, the three models achieved the lowest AIC and mase are AAdA, AAA and MMdM, respectively. 
+``` {r}
+# Define model codes (use "_d" to indicate damped)
+models <- c("AAA", "MAA", "AAA_d", "MAA_d", "MAM", "MMM", "MAM_d", "MMM_d")
+
+# Fit all models and collect metrics in one line
+ets_results <- do.call(rbind, lapply(models, function(m) {
+  damped_flag <- grepl("_d$", m)
+  model_code <- gsub("_d$", "", m)
+  fit <- ets(solar_ts, model=model_code, damped=damped_flag)
+  data.frame(
+    Model = m,
+    AIC   = fit$aic,
+    BIC   = fit$bic,
+    MASE  = accuracy(fit)[1, "MASE"]
+  )
+}))
+
+# Sort by MASE
+ets_results_sorted <- ets_results[order(ets_results$MASE), ]
+ets_results_sorted
+  
+```
+* The ETS(A,Ad,A) model (Additive Error, Additive Damped Trend, Additive Seasonality) was automatically identified as the best-fitting model within the ETS family based on its MASE score. However, the critical residual checks show that it's not suitable for reliable forecasting.
+* The failure of the Ljung-Box test is due to strong, unmodeled patterns left in the errors. The ACF plot for this model shows a large, statistically significant spike at Lag 1 and several large spikes near Lag 12, indicating that the Additive formulation of the seasonal component was insufficient to capture the true, likely multiplicative, seasonal behavior of the data.
+``` {r}
+ets.AAdA <- ets(solar_ts, model = "AAA", damped = TRUE)
+summary(ets.AAdA)
+checkresiduals(ets.AAdA)
+```
+* This model, which represents the standard undamped Holt-Winters additive method within the ETS framework, performed slightly worse than its damped counterpart (ETS(A,Ad,A)), and both are statistically flawed,
+* Both ETS models are statistically invalid, despite there competitive MASE scores
+``` {r}
+ets.AAA <- ets(solar_ts, model = "AAA", damped = FALSE)
+summary(ets.AAA)
+checkresiduals(ets.AAA)
+```
+* This model, the multiplicative counterpart to the previously failed additive models, was the third-best performing model in your automated ETS search. The ACF plot for ETS(M,Md,M)  shows a significant spike at Lag 24 (and near Lag 1), indicating that residual correlation remains in the errors. This failure of the automated ETS fit to fully smooth the errors is why its p-value is so low and why it cannot be trusted for long-term forecasting.
+``` {r}
+ets.MMdM <- ets(solar_ts, model = "MMM", damped = TRUE)
+summary(ets.MMdM)
+checkresiduals(ets.MMdM)
+```
+* The final ranking confirms the Holt-Winters Multiplicative Damped model as the optimal forecasting tool. It achieved the lowest MASE of 0.20356, demonstrating a significant improvement in accuracy over the best ARDL model (MASE 0.4479). Crucially, this model was the only top-performing candidate that was also statistically valid, successfully passing the Ljung-Box test and ensuring the reliability of its forecasts. All other top exponential smoothing models (AAA and AAA_d) failed the residual tests, reinforcing the initial choice.
+``` {r}
+sp_results <- data.frame( #comparative board for state-space models
+  Model = c("AAdA", "AAA", "MMdM"),
+  AIC = c(ets.AAdA$aic, ets.AAA$aic, ets.MMdM$aic),
+  BIC = c(ets.AAdA$bic, ets.AAA$bic, ets.MMdM$bic),
+  MASE = c(accuracy(ets.AAdA)[,"MASE"][1], accuracy(ets.AAA)[,"MASE"][1],
+           accuracy(ets.MMdM)[,"MASE"][1]))
+compared_board <- rbind(compared_board, sp_results) #combine with previous results
+compared_board <- compared_board[order(compared_board$MASE), ]
+compared_board
+```
+
+### Forecasting
+* The plot demonstrates a statistically sound forecast that respects the strong seasonality and damping observed in the solar radiation data, aligning with the low MASE score (0.20356)
+* However, the shaded prediction intervals get progressively wider as the forecast moves further into the future.
+```{r}
+fit_hw_md <- hw(solar_ts, seasonal = "multiplicative", damped = TRUE, h = 24) #forecast 2 years ahead 
+autoplot(fit_hw_md) +
+  labs(
+    title = "Holt–Winters Multiplicative Damped Forecast (24 Months Ahead)",
+    y = "Solar Radiation Index",
+    x = "Year"
+  ) +
+  # Customize colors/theme 
+  theme_minimal() +
+  scale_color_manual(values = c("Data" = "darkgray"))
+```
+
+#Task 2: Analyse correlation
+### Data Exploration
+* The analysis began by importing the dataset and converting the relevant financial variables into quarterly time series objects, which were initialized to start in the third quarter of 2003.
+```{r}
+# read data
+data2<-read.csv("data2.csv")
+# examine
+head(data2)
+# time series object
+price_ts <- ts(data2$price, start = c(2003, 3), frequency = 4)
+change_ts <- ts(data2$change, start = c(2003, 3), frequency = 4)
+data2_ts <- ts(data2 [,2:3], start = c(2003, 3), frequency = 4)
+```
+
+### Correlation check
+* Through the plot, the two series appear to move together visually. The visual co-movement supports the high correlation but does not prove a casual or genuine short-run relationship.
+* The correlation coefficient indicates a strong positive contemporaneous linear relationship. However, it is highly likely to be spurious:
+  * The two series exhibits non-stationary pattern, and any two non-stationary series that trend in the same direction will naturally produce a high correlation coefficient.
+```{r}
+#plot the correlation
+price.change = ts.intersect(price_ts,log(change_ts))
+plot(price.change,yax.flip=T)
+
+# correlation coefficient
+cor(price_ts,change_ts)
+```
+* The high, slow-tapering correlations across many lags confirm that the measured relationship is driven by the shared non-stationary behavior (trend) of the series
+* The stationarity will be tested for both series to prove or disprove spuriousness.
+``` {r}
+ccf(as.vector(price.change[,1]), as.vector(price.change[,2 #CCF plot
+ ]),ylab='CCF', main = "Sample CCF: Melbourne PPI vs Logarithm of
+    Quarterly Population Change (Victoria)")
+```
+
+### Non-stationarity examination
+* The plot clearly shows a strong upward trend in the Residential Property Price Index (PPI) over the entire period, confirming our earlier visual assessment. 
+* The ACF shows a slowly decaying pattern, where the autocorrelation coefficients remain high and significant for many lags before eventually dropping. This persistence is the classic visual signature of a non-stationarity series with a trend (Kis, 2024). 
+* The P-value of 0.8458 is much greater than the standard significance level of 0.05, we fail to reject the null hypothesis, the series is non-stationary. 
+```{r}
+plots <- function(x) { #function to explore time series objects: time series plot, ACF plot and ADF test
+  plot(x, xlab='Year', main="Time series")
+  points(y=x,x=time(x), pch=as.vector(season(x)))
+  acf(x, main="Sample ACF plot", lag.max = 48) #ACF plot
+  adf <-adf.test(x)
+  print(adf)
+}
+plots(price.change[,1])
+```
+* The logarithm of quarterly population change has both a trend component and a strong seasonal component
+* The ACF exhibits a slow decay, with positive and significant autocorrelation coefficients lasting for multiple lags. 
+* The P-value is 0.6077, much higher than 0.05, then we fail to reject the null hypothesis. This series is non-stationary
+```{r}
+plots(price.change[,2])
+```
+
+#### Differencing
+* The seasonal differencing is applied at lag 4, followed by first differencing for both series. This approach is standard for data that is both non-stationary in trend and seasonal.
+```{r}
+price_diff <- diff(diff(price.change[,1]),4) #first differencing and seasonal differencing
+adf.test(price_diff)
+change_diff <-diff(diff(price.change[,2],4))
+adf.test(change_diff)
+```
+
+#### Prewhitening and Conclusion
+* The strong initial correlation between the Melbourne Property Price Index and Victoria's Quarterly Population Change is definitively spurious. Once the non-stationary trends and seasonality are removed through differencing and prewhitening, there is no statistically significant evidence of a short-run linear relationship between the two series.
+```{r}
+me.dif=ts.intersect(price_diff,change_diff) 
+prewhiten(as.vector(me.dif[,1]),as.vector(me.dif[,2]),ylab='CCF', main="Sample CFF after prewhitening of the PPI  
+          and Population Change series") #prewhitening
+```
+
+# Conclusion
+* Task 1: The comprehensive evaluation across all mandated model classes concluded that the Holt-Winters Multiplicative Damped exponential smoothing model yielded the superior forecast. Initial analysis showed the solar radiation series to be stationary but highly seasonal (S=12), with a strong inverse relationship to precipitation. The Holt-Winters Multiplicative Damped model successfully captured the multiplicative seasonal structure and damped the long-term trend, resulting in the lowest overall forecast error with a MASE of 0.20356. This model is therefore selected as the most accurate for the 2-year forecast.
+* Task 2: The comprehensive time series analysis decisively demonstrates that the strong initial correlation of 0.697 between the Melbourne Property Price Index and the Logarithm of Quarterly Population Change is spurious. Formal Augmented Dickey-Fuller (ADF) tests confirmed that both the PPI and the population change series were non-stationary in both trend and seasonality.
+
+# Reference
+Kis, A. (2024, July 26). *Understanding Autocorrelation and Partial Autocorrelation Functions (ACF and PACF)*. Medium. https://medium.com/@kis.andras.nandor/understanding-autocorrelation-and-partial-autocorrelation-functions-acf-and-pacf-2998e7e1bcb5
